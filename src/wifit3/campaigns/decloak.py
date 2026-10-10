@@ -13,6 +13,7 @@ import asyncio
 import logging
 import os
 import time
+from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from wifit3.campaigns.auth_assoc import Association, AssocState, build_client_leaving
@@ -41,6 +42,16 @@ SIBLING_SUFFIXES: list[str] = [
     "-Setup", "_Setup",
     "-EXT",
 ]
+
+
+@dataclass
+class DecloakInput:
+    """The modal's output: the exact SSIDs to send and which methods send them. Methods run
+    in this order, each sweeping every SSID before the next starts."""
+    candidate_ssids: list[str] = field(default_factory=list)
+    use_directed_probe: bool = True
+    use_broadcast_probe: bool = False
+    use_authassoc_probe: bool = False
 
 
 def candidates_from_sibling(sibling_ssid: str) -> list[str]:
@@ -81,23 +92,20 @@ class DecloakCampaign(Campaign):
     def visible(cls, ap: AccessPoint) -> bool:
         return ap.is_hidden
 
-    @classmethod
-    def ineligible_reason(cls, ap: AccessPoint) -> Optional[str]:
-        return None if ap.siblings else "No named sibling to guess from"
-
-    def __init__(self, array: WlanArray, target: AccessPoint, *,
-                 candidates: Optional[list[str]] = None,
+    def __init__(self, array: WlanArray, target: AccessPoint,
+                 decloak_input: Optional[DecloakInput] = None, *,
                  log: Optional[Callable[[str], None]] = None) -> None:
         super().__init__(ap=target, array=array)
         self.sibling_ssid = named_sibling_ssid(array, target)
-        self.candidate_ssids = candidates or candidates_from_sibling(self.sibling_ssid)
+        chosen = decloak_input or DecloakInput(candidates_from_sibling(self.sibling_ssid))
+        self.candidate_ssids = list(chosen.candidate_ssids)
+        self.use_directed_probe = chosen.use_directed_probe
+        self.use_broadcast_probe = chosen.use_broadcast_probe
+        self.use_authassoc_probe = chosen.use_authassoc_probe
         self.bssid_bytes = str_to_mac(target.bssid)
         self.source_mac = random_client_mac()
         self.revealed: Optional[str] = None
         self.sent = 0
-        self.use_directed_probe = True
-        self.use_broadcast_probe = False
-        self.use_authassoc_probe = False
         self._log = log or (lambda _message: None)
 
     @property

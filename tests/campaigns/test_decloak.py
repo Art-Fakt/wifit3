@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 from wifit3.campaigns.decloak import (
     SIBLING_SUFFIXES,
     DecloakCampaign,
+    DecloakInput,
     candidates_from_sibling,
     named_sibling_ssid,
 )
@@ -23,7 +24,7 @@ def _campaign(candidates, *, target=None):
     array = MagicMock()
     array.access_points = {}
     return DecloakCampaign(array, target or AccessPoint(bssid=_BSSID, channel=6),
-                           candidates=candidates)
+                           DecloakInput(candidates, use_authassoc_probe=True))
 
 
 # ----- candidate generation ----------------------------------------------------

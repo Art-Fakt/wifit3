@@ -6,7 +6,7 @@ from typing import Optional
 from wifit3.campaigns.campaign import Campaign
 from wifit3.campaigns.wep import WepCampaign
 from wifit3.campaigns.eviltwin import EvilTwinCampaign, EvilTwinInput
-from wifit3.campaigns.decloak import DecloakCampaign
+from wifit3.campaigns.decloak import DecloakCampaign, DecloakInput
 
 
 class CampaignControls:
@@ -20,7 +20,7 @@ class CampaignControls:
 
     def start(self, campaign: type[Campaign], array, ap, *,
               log=None, evil_input: Optional[EvilTwinInput] = None,
-              candidates: Optional[list[str]] = None) -> Optional[Campaign]:
+              decloak_input: Optional[DecloakInput] = None) -> Optional[Campaign]:
         """Construct and run one campaign, None if another campaign is active.
 
         Constructors differ per campaign (intentionally not unified): wep takes
@@ -33,7 +33,7 @@ class CampaignControls:
         elif campaign is EvilTwinCampaign:
             inst = campaign(array, ap, evil_input)
         elif campaign is DecloakCampaign:
-            inst = campaign(array, ap, candidates=candidates, log=log)
+            inst = campaign(array, ap, decloak_input, log=log)
         else:
             inst = campaign(array, ap, log=log)
         inst.run()
