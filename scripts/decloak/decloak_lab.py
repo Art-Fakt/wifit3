@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import statistics
 import sys
 import time
@@ -32,6 +33,7 @@ sys.path.insert(0, str(_HERE.parent.parent / "src"))
 sys.path.insert(0, str(_HERE.parent))
 
 from dev import select_device
+from wifit3.campaigns.auth_assoc import Association, AssocState, build_client_leaving
 from wifit3.device.manager import wlan_ifaces, wlan_close
 from wifit3.dot11 import mac_to_str, str_to_mac
 from wifit3.dot11.mac import BROADCAST_MAC, random_client_mac
@@ -41,6 +43,8 @@ from wifit3.wlan.array import WlanArray
 
 PROBE_RESPONSE_WAIT_S = 0.15
 BEACON_LISTEN_S = 2.0
+AUTH_TIMEOUT_S = 0.2
+ASSOC_TIMEOUT_S = 0.3
 
 PROBE_REQ = 0x40
 PROBE_RESP = 0x50
@@ -166,6 +170,53 @@ async def sweep(iface, sniffer, prober: ProberCounts, sniffed: Optional[SnifferC
     return probes
 
 
+async def claim_names(iface, ap: AccessPoint, args, our_mac: bytes) -> int:
+    """Authenticate once, then claim a fresh sentinel SSID and --ssid in turn, --probes
+    times. An AP that accepts the sentinel accepts anything, so its verdict on --ssid
+    means nothing; one that refuses the sentinel and accepts --ssid has named itself."""
+    association = Association(iface, args.bssid, "", args.channel, our_mac=our_mac,
+                              auth_timeout=AUTH_TIMEOUT_S, assoc_timeout=ASSOC_TIMEOUT_S,
+                              assoc_trailer_ies=ap.rsn_ie or b"",
+                              privacy=bool(ap.rsn_ie))
+    association.start()
+    try:
+        if not await association.authenticate():
+            print(f"[a] {args.bssid.lower()} will not authenticate us "
+                  f"(auth_status={association.auth_status})")
+            return 1
+        print(f"[a] authenticated as {mac_to_str(our_mac)}, state={association.state.name}")
+        verdicts: dict[str, list[Optional[int]]] = {"sentinel": [], "target": []}
+        for _ in range(args.probes):
+            for label, ssid in (("sentinel", f"wifit3-control-{os.urandom(8).hex()}"),
+                                ("target", args.ssid)):
+                if association.state is AssocState.UNAUTHENTICATED:
+                    if not await association.authenticate():
+                        print("[a] deauthenticated mid-sweep, stopping")
+                        return 1
+                verdicts[label].append(await association.associate_as(ssid))
+        for label in ("sentinel", "target"):
+            got = verdicts[label]
+            accepted = sum(1 for s in got if s == 0)
+            silent = sum(1 for s in got if s is None)
+            codes = sorted({s for s in got if s not in (0, None)})
+            name = args.ssid if label == "target" else "wifit3-control-<random>"
+            print(f"[a] {label:8} {name!r}: accepted {accepted}/{len(got)}, "
+                  f"refused with status {codes or '-'}, no answer {silent}")
+        if any(s == 0 for s in verdicts["sentinel"]):
+            print("[a] the AP accepts an invented SSID; association proves nothing here")
+        elif any(s == 0 for s in verdicts["target"]):
+            print(f"[a] CONFIRMED: refused the sentinel, accepted {args.ssid!r}")
+        else:
+            print(f"[a] refused both; {args.ssid!r} is not this AP's SSID by association")
+    finally:
+        association.stop()
+        try:
+            await iface.send_no_wait(build_client_leaving(str_to_mac(args.bssid), our_mac))
+        except Exception as exc:
+            print(f"[a] client-leaving cleanup failed: {exc}")
+    return 0
+
+
 def report(probes: list[Probe], prober: ProberCounts, sniffed: Optional[SnifferCounts],
            ap: AccessPoint, args) -> None:
     answered = [p for p in probes if p.answers]
@@ -193,12 +244,20 @@ def report(probes: list[Probe], prober: ProberCounts, sniffed: Optional[SnifferC
               f"{prober.answer_raw.hex()}")
     if answered:
         names = sorted({p.name for p in answered if p.name})
+        matched = [p for p in answered if p.name == args.ssid]
         ordered = sorted(p.latency for p in answered if p.latency is not None)
         p95 = ordered[min(len(ordered) - 1, int(round(0.95 * (len(ordered) - 1))))]
         print(f"[+] named {names}, {sum(p.answers for p in answered)} response frames total")
         print(f"[t] reply latency min +{ordered[0]:.3f}s  median "
               f"+{statistics.median(ordered):.3f}s  p95 +{p95:.3f}s  max "
               f"+{ordered[-1]:.3f}s   (n={len(ordered)})")
+        if len(matched) == len(answered):
+            print(f"[m] every answer carried the SSID we asked for: {args.ssid!r}")
+        else:
+            others = sorted({p.name for p in answered if p.name != args.ssid})
+            print(f"[m] FALSE POSITIVE RISK: asked {args.ssid!r}, "
+                  f"{len(answered) - len(matched)}/{len(answered)} answer(s) carried "
+                  f"{others} instead")
     elif acks:
         print("[-] no answer, but the AP ACKed our probes: it heard us and declined")
     elif ap.beacons:
@@ -237,12 +296,18 @@ async def run(array: WlanArray, iface, sniffer, args) -> int:
             # enable_rx_acks clears _our_tx_macs, so register our MAC after arming.
             await sniffer.enable_rx_acks()
             sniffer.driver._our_tx_macs.add(our_mac)
-        addressing = "broadcast" if args.broadcast else "directed"
+        method = "assoc" if args.assoc else ("broadcast" if args.broadcast else "directed")
         monitor = "active-monitor" if args.active_monitor else "plain-monitor"
-        print(f"[*] CH{args.channel} {addressing} {monitor}: {args.probes}x {args.ssid!r} "
+        print(f"[*] CH{args.channel} {method} {monitor}: {args.probes}x {args.ssid!r} "
               f"at {args.bssid.lower()} as {mac_to_str(our_mac)}")
+        if args.assoc and not args.active_monitor:
+            print("[!] assoc without --active-monitor: the AP's Auth Resp goes unACKed, "
+                  "so authentication will not complete")
         await iface.enable_rx_acks()
         try:
+            if args.assoc:
+                rc = await claim_names(iface, ap, args, our_mac)
+                return rc
             probes = await sweep(iface, sniffer, prober, sniffed, args, our_mac)
         finally:
             await iface.disable_rx_acks()
@@ -269,6 +334,8 @@ async def main() -> int:
     ap.add_argument("--probes", type=int, default=1, help="how many probes to send")
     ap.add_argument("--broadcast", action="store_true",
                     help="address the probe to ff:ff:ff:ff:ff:ff instead of --bssid")
+    ap.add_argument("--assoc", action="store_true",
+                    help="claim --ssid in an Association Request instead of probing")
     ap.add_argument("--active-monitor", action="store_true",
                     help="HW-ACK frames sent to our forged STA")
     ap.add_argument("--verbose", action="store_true",
