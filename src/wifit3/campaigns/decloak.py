@@ -1,9 +1,11 @@
-"""Guess a hidden AP's SSID: directed Probe Requests first, then Association Requests.
+"""Guess a hidden AP's SSID by naming candidates at it, one method at a time.
 
-An AP answers a directed probe only when the probe names it, so the sink's existing
-decloak path catches the reply. When every probe goes unanswered, the same candidates are
-claimed in Association Requests: 802.11 leaves a refused station AUTHENTICATED, so one
-Auth Req covers the whole sweep.
+Each enabled method sweeps every candidate before the next begins, cheapest first:
+directed Probe Requests (hardware-retried, so a miss is a real miss), then broadcast
+Probe Requests (one frame, never ACKed, but some radios answer only these), then
+Association Requests (no SSID in the Auth exchange, so it reaches a radio that ignores
+probes entirely). All of it runs inside one device claim, so the card HW-ACKs the AP's
+replies throughout instead of making it retransmit them.
 """
 from __future__ import annotations
 
@@ -16,7 +18,7 @@ from typing import Callable, Optional
 from wifit3.campaigns.auth_assoc import Association, AssocState, build_client_leaving
 from wifit3.campaigns.campaign import Campaign
 from wifit3.dot11 import mac_to_str, str_to_mac
-from wifit3.dot11.mac import random_client_mac
+from wifit3.dot11.mac import BROADCAST_MAC, random_client_mac
 from wifit3.dot11.probe import probe_req
 from wifit3.models import AccessPoint
 from wifit3.wlan.array import WlanArray
@@ -24,8 +26,9 @@ from wifit3.wlan.array import WlanArray
 logger = logging.getLogger(__name__)
 
 SSID_MAX_OCTETS = 32
-PROBE_REPLY_WINDOW_S = 0.3
-ASSOCIATION_CANDIDATE_LIMIT = 32
+PROBE_RESPONSE_WAIT_S = 0.15
+AUTH_TIMEOUT_S = 0.2
+ASSOC_TIMEOUT_S = 0.3
 
 # Curated suffix list, kept short on purpose so a full run is ~5 seconds. In-house: keep
 # growing it, do not import anyone else's.
@@ -66,8 +69,7 @@ def named_sibling_ssid(array: WlanArray, hidden: AccessPoint) -> str:
 
 
 class DecloakCampaign(Campaign):
-    """Sends a Probe Request per candidate SSID, then an Assoc Req per candidate, until
-    one of them makes the AP name itself."""
+    """Names every candidate SSID at one hidden AP until the AP names itself back."""
 
     button_id = "btn-decloak"
     key = "decloak"
@@ -88,65 +90,102 @@ class DecloakCampaign(Campaign):
                  log: Optional[Callable[[str], None]] = None) -> None:
         super().__init__(ap=target, array=array)
         self.sibling_ssid = named_sibling_ssid(array, target)
-        self.candidates = candidates or candidates_from_sibling(self.sibling_ssid)
+        self.candidate_ssids = candidates or candidates_from_sibling(self.sibling_ssid)
         self.bssid_bytes = str_to_mac(target.bssid)
         self.source_mac = random_client_mac()
         self.revealed: Optional[str] = None
         self.sent = 0
+        self.use_directed_probe = True
+        self.use_broadcast_probe = False
+        self.use_authassoc_probe = False
         self._log = log or (lambda _message: None)
+
+    @property
+    def planned(self) -> int:
+        """Candidates times enabled methods: every method sweeps the whole list."""
+        methods = sum((self.use_directed_probe, self.use_broadcast_probe,
+                       self.use_authassoc_probe))
+        return len(self.candidate_ssids) * methods
 
     def status_under_card(self) -> str:
         return "● Decloak"
 
     def status_headlines(self, vault) -> list[str]:
         return ["[bold cyan]● Decloak[/bold cyan] guessing SSIDs",
-                f"[dim]{self.sent}/{len(self.candidates)} sent[/dim]"]
+                f"[dim]{self.sent}/{self.planned} sent[/dim]"]
 
     async def _loop(self) -> None:
-        if not self.candidates:
+        if not self.candidate_ssids:
             self._log("no named sibling to guess from")
             return
         if self.iface is None:
             self._log(f"no card can reach channel {self.ap.channel}")
             return
         self._log(f"guessing from '{self.sibling_ssid}'")
-        self.array.register_forged_mac(self.source_mac)
-        if self.iface.current_channel != self.ap.channel:
-            await self.iface.set_channel(self.ap.channel)
-        self.revealed = await self._probe_candidates()
+        async with self.array.claim(self.iface):
+            if self.iface.current_channel != self.ap.channel:
+                await self.iface.set_channel(self.ap.channel)
+            await self._adopt_acking_mac()
+            try:
+                for enabled, method in ((self.use_directed_probe, self._probe_directed),
+                                        (self.use_broadcast_probe, self._probe_broadcast),
+                                        (self.use_authassoc_probe, self._claim_candidates)):
+                    if self.stopped or self.revealed is not None:
+                        break
+                    if enabled:
+                        self.revealed = await method()
+            finally:
+                await self.iface.clear_fake_mac()
         if self.revealed is None and not self.stopped:
-            self.revealed = await self._associate_candidates()
-        if self.revealed is None:
             logger.info("[DECLOAK] %s: no candidate matched", self.ap.bssid)
+
+    async def _adopt_acking_mac(self) -> None:
+        """Take the MAC the card will HW-ACK as our STA identity. Without it a MediaTek
+        card retransmits each probe ~12 times and the AP retransmits every reply."""
+        assumed = await self.iface.set_fake_mac(self.source_mac, self.ap.bssid)
+        if assumed is None:
+            logger.info("[DECLOAK] %s has no active monitor; replies go unACKed",
+                        self.ap.bssid)
+        else:
+            self.source_mac = str_to_mac(assumed)
+        self.array.register_forged_mac(self.source_mac)
+        logger.info("[DECLOAK] %s: sweeping %d candidate(s) as STA %s", self.ap.bssid,
+                    len(self.candidate_ssids), mac_to_str(self.source_mac))
 
     async def teardown(self) -> None:
         self.array.unregister_own_mac(self.source_mac)
 
     # ----- probes ------------------------------------------------------------
 
-    async def _probe_candidates(self) -> Optional[str]:
-        """One directed Probe Request per candidate. The AP replies to the one naming it,
-        and the sink sets ap.ssid off that reply."""
+    async def _probe_directed(self) -> Optional[str]:
+        """Addr1 and Addr3 both the BSSID: the AP ACKs it, so the card stops at one copy
+        and an unanswered probe is the AP declining rather than a lost frame."""
+        return await self._sweep_probes(self.bssid_bytes, "directed")
+
+    async def _probe_broadcast(self) -> Optional[str]:
+        """Addr1 and Addr3 both broadcast. Group-addressed, so never ACKed and never
+        retried; some radios answer only this shape."""
+        return await self._sweep_probes(BROADCAST_MAC, "broadcast")
+
+    async def _sweep_probes(self, addressee: bytes, method: str) -> Optional[str]:
         before = self.ap.ssid
-        logger.info("[DECLOAK] %s: probing %d candidates as STA %s", self.ap.bssid,
-                    len(self.candidates), mac_to_str(self.source_mac))
-        for candidate in self.candidates:
+        for ssid in self.candidate_ssids:
             if self.stopped:
                 return None
             await self.iface.send_no_wait(
-                probe_req(self.bssid_bytes, self.source_mac, candidate,
-                          channel=self.ap.channel)
+                probe_req(addressee, self.source_mac, ssid, channel=self.ap.channel)
             )
             self.sent += 1
-            revealed = await self._wait_for_ssid(before)
+            revealed = await self._revealed_ssid(before)
             if revealed is not None:
-                logger.info("[DECLOAK] probe hit on %r -> %r", candidate, revealed)
+                logger.info("[DECLOAK] %s probe hit on %r -> %r", method, ssid, revealed)
                 return revealed
         return None
 
-    async def _wait_for_ssid(self, before: Optional[str]) -> Optional[str]:
-        """Poll ap.ssid for PROBE_REPLY_WINDOW_S; the sink sets it from the RX thread."""
-        deadline = time.monotonic() + PROBE_REPLY_WINDOW_S
+    async def _revealed_ssid(self, before: Optional[str]) -> Optional[str]:
+        """The AP's name once the sink has it, else None after PROBE_RESPONSE_WAIT_S. The
+        sink sets it off our own Probe Response or off one the AP sent another client."""
+        deadline = time.monotonic() + PROBE_RESPONSE_WAIT_S
         while time.monotonic() < deadline and not self.stopped:
             if self.ap.ssid and self.ap.ssid != before:
                 return self.ap.ssid
@@ -155,42 +194,34 @@ class DecloakCampaign(Campaign):
 
     # ----- associations ------------------------------------------------------
 
-    async def _associate_candidates(self) -> Optional[str]:
+    async def _claim_candidates(self) -> Optional[str]:
         """Authenticate, check the AP refuses an invented SSID, then claim each candidate."""
-        candidates = self.candidates[:ASSOCIATION_CANDIDATE_LIMIT]
-        logger.info("[DECLOAK] probes unanswered; associating through %d candidates",
-                    len(candidates))
-        # Unarmed, the AP's Auth Resp goes unACKed, authentication never completes, and
-        # every Assoc Req comes back as a class-2 deauth instead of a verdict.
-        arm = self.array.lease(fake_mac=self.source_mac, bssid=self.bssid_bytes,
-                               iface=self.iface)
-        async with arm:
-            our_mac = str_to_mac(arm.mac) if arm.mac else self.source_mac
-            association = Association(
-                self.iface, self.ap.bssid, "", self.ap.channel, our_mac=our_mac,
-                auth_timeout=0.2, assoc_timeout=0.3,
-                assoc_trailer_ies=self.ap.rsn_ie or b"",
-                privacy=bool(self.ap.rsn_ie), should_stop=lambda: self.stopped,
-            )
-            association.start()
-            try:
-                if not await association.authenticate():
-                    logger.info("[DECLOAK] %s will not authenticate us", self.ap.bssid)
-                    return None
-                invented = f"wifit3-control-{os.urandom(8).hex()}"
-                if await association.associate_as(invented) == 0:
-                    logger.info("[DECLOAK] %s accepts any SSID; association proves nothing",
-                                self.ap.bssid)
-                    return None
-                return await self._claim_each(association, candidates)
-            finally:
-                association.stop()
-                await self._announce_leaving(our_mac)
+        logger.info("[DECLOAK] associating through %d candidate(s)",
+                    len(self.candidate_ssids))
+        association = Association(
+            self.iface, self.ap.bssid, "", self.ap.channel, our_mac=self.source_mac,
+            auth_timeout=AUTH_TIMEOUT_S, assoc_timeout=ASSOC_TIMEOUT_S,
+            assoc_trailer_ies=self.ap.rsn_ie or b"",
+            privacy=bool(self.ap.rsn_ie), should_stop=lambda: self.stopped,
+        )
+        association.start()
+        try:
+            if not await association.authenticate():
+                logger.info("[DECLOAK] %s will not authenticate us", self.ap.bssid)
+                return None
+            invented = f"wifit3-control-{os.urandom(8).hex()}"
+            if await association.associate_as(invented) == 0:
+                logger.info("[DECLOAK] %s accepts any SSID; association proves nothing",
+                            self.ap.bssid)
+                return None
+            return await self._claim_each(association)
+        finally:
+            association.stop()
+            await self._announce_leaving()
 
-    async def _claim_each(self, association: Association,
-                          candidates: list[str]) -> Optional[str]:
+    async def _claim_each(self, association: Association) -> Optional[str]:
         """Claim each candidate in turn; the one the AP accepts is the AP's own SSID."""
-        for candidate in candidates:
+        for ssid in self.candidate_ssids:
             if self.stopped:
                 return None
             # A refusal leaves us AUTHENTICATED and a disassoc returns us to it; only a
@@ -200,14 +231,16 @@ class DecloakCampaign(Campaign):
                     logger.info("[DECLOAK] %s deauthenticated us mid-sweep", self.ap.bssid)
                     return None
             self.sent += 1
-            if await association.associate_as(candidate) == 0:
-                self.array.decloak(self.ap, candidate, "assoc")
-                logger.info("[DECLOAK] %s accepted %r", self.ap.bssid, candidate)
-                return candidate
+            if await association.associate_as(ssid) == 0:
+                self.array.decloak(self.ap, ssid, "assoc")
+                logger.info("[DECLOAK] %s accepted %r", self.ap.bssid, ssid)
+                return ssid
         return None
 
-    async def _announce_leaving(self, our_mac: bytes) -> None:
+    async def _announce_leaving(self) -> None:
         try:
-            await self.iface.send_no_wait(build_client_leaving(self.bssid_bytes, our_mac))
+            await self.iface.send_no_wait(
+                build_client_leaving(self.bssid_bytes, self.source_mac)
+            )
         except Exception:
             logger.debug("[DECLOAK] client-leaving cleanup failed", exc_info=True)
