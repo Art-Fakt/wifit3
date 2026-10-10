@@ -130,3 +130,16 @@ and reused (2.5x), on a high-end x86 laptop.
 **Direction.** Build the 10000 PSK1 (and 1000 PSK2) halves once per `recover_pin` call and compare
 `HMAC_AuthKey(E-S || psk || PKe || PKr)` directly, instead of going through `check_pin_half` per
 candidate. Keep `check_pin_half` as-is: it is the hostapd-shaped primitive the online path uses.
+
+## RTL8188EUS and RTL8821AU (DKMS) bring-up is flaky with several cards attached
+
+**Problem.** Both DKMS drivers fail `connect()` intermittently when more than one device is
+plugged in. The RTL8821AU raised `USBError [Errno 2] Entity not found` from the first vendor
+control transfer on 3 of 8 consecutive bring-ups with two cards attached, each time followed by
+`[8821au-dkms-rx] device gone: [Errno 19] No such device`; the device stayed enumerated on the
+bus throughout and the next attempt succeeded. See also the RTL8188EUS flake, where `connect()`
+returns True on a dead handle.
+
+**Direction.** Deeper dive needed. Establish first whether the failure is contention between two
+cards' bring-up sequences or a per-device cold-boot race, by bringing the same card up alone
+repeatedly versus alongside a second card.
