@@ -298,14 +298,6 @@ class ScannerView(Screen):
         )
 
     def _log_decloak(self, ap: AccessPoint) -> None:
-        if ap.bssid in self._prev_ssids and not self._prev_ssids[ap.bssid] and ap.ssid:
-            self._write_log(
-                Text.from_markup(
-                    f"[bold yellow][*] Decloaked Hidden Network: "
-                    f"{escape(ap.bssid)} -> {escape(ap.ssid)}[/bold yellow]",
-                    emoji=False,
-                )
-            )
         self._prev_ssids[ap.bssid] = ap.ssid
 
     def _evict_expired_aps(self) -> None:

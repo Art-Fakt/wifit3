@@ -1016,6 +1016,8 @@ class FocusViewV2(Screen):
     def _finish_decloak(self, camp) -> None:
         if camp.revealed:
             self._log(treelog.leaf_ok(f"revealed [bold]{escape(camp.revealed)}[/bold]"))
+            if Config.remember_decloak(camp.ap.bssid, camp.revealed):
+                self.app.persist_config()
         else:
             self._log(treelog.leaf_fail(f"no match in {camp.sent} guesses"))
 

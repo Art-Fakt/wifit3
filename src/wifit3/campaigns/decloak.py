@@ -18,7 +18,7 @@ from typing import Callable, Optional
 
 from wifit3.campaigns.auth_assoc import Association, AssocState, build_client_leaving
 from wifit3.campaigns.campaign import Campaign
-from wifit3.dot11 import mac_to_str, str_to_mac
+from wifit3.dot11 import SSID_MAX_OCTETS, mac_to_str, str_to_mac
 from wifit3.dot11.mac import BROADCAST_MAC, random_client_mac
 from wifit3.dot11.probe import probe_req
 from wifit3.models import AccessPoint
@@ -26,21 +26,80 @@ from wifit3.wlan.array import WlanArray
 
 logger = logging.getLogger(__name__)
 
-SSID_MAX_OCTETS = 32
 PROBE_RESPONSE_WAIT_S = 0.15
 AUTH_TIMEOUT_S = 0.2
 ASSOC_TIMEOUT_S = 0.3
 
-# Curated suffix list, kept short on purpose so a full run is ~5 seconds. In-house: keep
-# growing it, do not import anyone else's.
+# In-house list: keep growing it, do not import anyone else's.
 SIBLING_SUFFIXES: list[str] = [
     "",
-    "-Guest", "_Guest", "-guest", " Guest",
-    "-5G", "_5G", "-5GHz",
-    "-2G", "_2G", "-2.4G", "-2.4GHz",
-    "-IoT", "_IoT",
-    "-Setup", "_Setup",
-    "-EXT",
+
+    # 1. Guest Networks (Common across almost all OEMs)
+    "-Guest", "_Guest", " Guest",
+    "-guest", "_guest", " guest",
+    "-GUEST", "_GUEST", " GUEST",
+    "-Guest-WiFi", "_Guest_WiFi", "-Guest-Wi-Fi", "_Guest_Wi-Fi",
+    "-Visitor", "_Visitor", " Visitor",
+
+    # 2. IoT / Smart Home (Segmented 2.4GHz networks)
+    "-IoT", "_IoT", " IoT",
+    "-iot", "_iot", " iot",
+    "-IOT", "_IOT", " IOT",
+    "-Smart", "_Smart", " Smart",
+
+    # 3. 2.4 GHz Band (Linksys, Asus, TP-Link, etc.)
+    "-2.4G", "_2.4G", " 2.4G",
+    "-2.4GHz", "_2.4GHz", " 2.4GHz",
+    "-2G", "_2G", " 2G",
+    "-2", "_2",
+
+    # 4. 5 GHz Band (Linksys, Netgear, Asus, etc.)
+    "-5G", "_5G", " 5G",
+    "-5GHz", "_5GHz", " 5GHz",
+    "-5", "_5",
+
+    # 5. 6 GHz Band (Modern WiFi 6E / WiFi 7 devices)
+    "-6G", "_6G", " 6G",
+    "-6GHz", "_6GHz", " 6GHz",
+    "-6", "_6",
+
+    # 6. Extenders, Repeaters, and Mesh Nodes (Netgear, TP-Link)
+    "-EXT", "_EXT", " EXT",
+    "-Ext", "_Ext", " Ext",
+    "-ext", "_ext", " ext",
+    "-EXT2G", "_EXT2G", "-EXT5G", "_EXT5G",
+    "-RE", "_RE",  # Very common for TP-Link range extenders
+    "-Repeater", "_Repeater",
+    "-Mesh", "_Mesh",
+    "-Node", "_Node",
+    "-Plus", "_Plus",
+    "-backhaul", "-BH", "_BH", "-dwb", "_dwb",
+
+    # 7. Setup, Provisioning, and Admin (Various ISPs and Enterprise)
+    "-Setup", "_Setup", " Setup",
+    "-Config", "_Config",
+    "-admin", "_admin", "-Admin",
+    "_Auto_Login", "-Auto", "_Auto",
+
+    # 8. Network Segmentation (SMB / Corporate / Public)
+    "-Staff", "_Staff", " Staff",
+    "-Public", "_Public", " Public",
+    "-Private", "_Private", " Private",
+    "-Secure", "_Secure", " Secure",
+    "-Free", "_Free", " Free",
+    "-Main", "_Main", " Main",
+    "-Corp", "_Corp",
+
+    # 9. Wi-Fi Standard Designators
+    "-ax", "_ax",
+    "-ac", "_ac",
+    "-WiFi6", "_WiFi6",
+    "-WiFi6E", "_WiFi6E",
+    "-WiFi7", "_WiFi7",
+    
+    # 10. Combined Band + Segment (e.g., Netgear default logic)
+    "-5G-GUEST", "_5G-GUEST", "-2.4G-GUEST", "_2.4G-GUEST",
+    "-5G_Guest", "_5G_Guest", "-2.4G_Guest", "_2.4G_Guest"
 ]
 
 

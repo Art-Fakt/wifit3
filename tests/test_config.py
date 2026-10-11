@@ -9,7 +9,7 @@ _DEFAULTS = {n: getattr(Config, n)
              for n in (
                  "theme", "scanner_sort", "scanner_sort_reverse", "scanner_sort_delay",
                  "silenced_bssids", "hide_silenced", "log_level", "captures_dir", "save_pcap",
-                 "hashcat_path", "wordlist_path")}
+                 "hashcat_path", "wordlist_path", "decloaked_ssids")}
 
 
 @pytest.fixture(autouse=True)
@@ -189,3 +189,25 @@ def test_load_without_tool_paths_keeps_whatever_is_set(config_path):
     Config.hashcat_path = "/usr/bin/hashcat"
     Config.load()
     assert Config.hashcat_path == "/usr/bin/hashcat"
+
+
+def test_decloaked_ssids_save_load_roundtrip(config_path):
+    assert Config.remember_decloak("AA:BB:CC:DD:EE:FF", "Net-Guest")
+    assert not Config.remember_decloak("aa:bb:cc:dd:ee:ff", "Net-Guest")   # already stored
+    Config.save()
+    assert "[decloak]\n'aa:bb:cc:dd:ee:ff' = 'Net-Guest'" in config_path.read_text("utf-8")
+    Config.decloaked_ssids = {}
+    Config.load()
+    assert Config.decloaked_ssid("aa:bb:cc:dd:ee:ff") == "Net-Guest"
+
+
+def test_an_over_long_or_empty_ssid_is_not_remembered():
+    assert not Config.remember_decloak("aa:bb:cc:dd:ee:ff", "x" * 33)
+    assert not Config.remember_decloak("aa:bb:cc:dd:ee:ff", "")
+    assert Config.decloaked_ssids == {}
+
+
+def test_decloaked_ssids_load_drops_junk_entries(config_path):
+    config_path.write_text("[decloak]\n'AA:BB:CC:DD:EE:FF' = 'Net'\n'11:22:33:44:55:66' = 7\n")
+    Config.load()
+    assert Config.decloaked_ssids == {"aa:bb:cc:dd:ee:ff": "Net"}

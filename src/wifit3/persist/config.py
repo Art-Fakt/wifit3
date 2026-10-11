@@ -6,6 +6,8 @@ from pathlib import Path
 
 from platformdirs import user_config_dir
 
+from wifit3.dot11 import SSID_MAX_OCTETS
+
 _PATH = Path(user_config_dir("wifit3", appauthor=False)) / "config.toml"
 
 
@@ -22,6 +24,7 @@ class Config:
     scanner_sort_reverse: bool = True
     scanner_sort_delay: float = 2.0
     silenced_bssids: list[str] = []
+    decloaked_ssids: dict[str, str] = {}
     hide_silenced: bool = False
     hashcat_path: str | None = None
     wordlist_path: str | None = None
@@ -29,6 +32,22 @@ class Config:
     @classmethod
     def is_silenced(cls, bssid: str) -> bool:
         return bssid.lower() in cls.silenced_bssids
+
+    @classmethod
+    def decloaked_ssid(cls, bssid: str) -> str | None:
+        return cls.decloaked_ssids.get(bssid.lower())
+
+    @classmethod
+    def remember_decloak(cls, bssid: str, ssid: str) -> bool:
+        """Store a confirmed BSSID-to-SSID reveal; whether it is new. A stored SSID is only
+        ever offered as a candidate: a BSSID can be reassigned, and SSIDs get renamed."""
+        if not ssid or len(ssid.encode("utf-8")) > SSID_MAX_OCTETS:
+            return False
+        key = bssid.lower()
+        if cls.decloaked_ssids.get(key) == ssid:
+            return False
+        cls.decloaked_ssids[key] = ssid
+        return True
 
     @classmethod
     def load(cls) -> None:
@@ -51,6 +70,11 @@ class Config:
             pass
         raw = data.get("silenced_bssids", cls.silenced_bssids)
         cls.silenced_bssids = [str(x).lower() for x in raw] if isinstance(raw, list) else cls.silenced_bssids
+        stored = data.get("decloak")
+        if isinstance(stored, dict):
+            cls.decloaked_ssids = {str(bssid).lower(): ssid for bssid, ssid in stored.items()
+                                   if isinstance(ssid, str) and ssid
+                                   and len(ssid.encode("utf-8")) <= SSID_MAX_OCTETS}
         cls.hide_silenced = bool(data.get("hide_silenced", cls.hide_silenced))
         cls.hashcat_path = _optional_str(data.get("hashcat_path"), cls.hashcat_path)
         cls.wordlist_path = _optional_str(data.get("wordlist_path"), cls.wordlist_path)
@@ -73,6 +97,10 @@ class Config:
             value = getattr(cls, key)
             if value:
                 text += f"{key} = {_fmt(value)}\n"
+        if cls.decloaked_ssids:
+            text += "\n[decloak]\n"
+            for bssid, ssid in sorted(cls.decloaked_ssids.items()):
+                text += f"{_fmt(bssid)} = {_fmt(ssid)}\n"
         try:
             _PATH.parent.mkdir(parents=True, exist_ok=True)
             _PATH.write_text(text, encoding="utf-8")
