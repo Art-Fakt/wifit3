@@ -42,11 +42,11 @@ from wifit3.ui.screens.focus_v2.eviltwin_modal import EvilTwinInputModal, _can_h
 from wifit3.campaigns.pin import (EMPTY_PIN_LABEL, WpsCampaign, load_run_state,
                                   run_progress_line)
 from wifit3.campaigns.deauth import DeauthCampaign
-from wifit3.campaigns.decloak import DecloakCampaign, DecloakInput
+from wifit3.campaigns.decloak import DecloakCampaign, DecloakInput, named_sibling_ssid
 from wifit3.campaigns.pbc import WpsPbcCapture
 from wifit3.campaigns.probe import probe_ap
 from .campaign_controls import CampaignControls
-from .decloak_modal import DecloakInputModal, decloak_defaults
+from .decloak_modal import DecloakInputModal
 from wifit3.campaigns.wps.registrar import PinResult
 from wifit3.crack.handshake import handshake_uncrackable_label
 from wifit3.models import AccessPoint, IdSource
@@ -970,8 +970,7 @@ class FocusViewV2(Screen):
         if not ap or not array:
             self._log("[red]✗ No target / interface. Aborting decloak.[/red]")
             return
-        base, prefill = decloak_defaults(array, ap)
-        self.app.push_screen(DecloakInputModal(ap.bssid, base, prefill),
+        self.app.push_screen(DecloakInputModal(ap.bssid, named_sibling_ssid(array, ap)),
                              self._on_decloak_input)
 
     def _on_decloak_input(self, chosen: Optional[DecloakInput]) -> None:

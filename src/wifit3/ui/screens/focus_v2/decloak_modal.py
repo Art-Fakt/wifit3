@@ -1,4 +1,4 @@
-"""Edit the exact candidate SSIDs and pick which methods send them, before Decloak starts."""
+"""Pick the SSIDs to guess at a hidden AP, and which methods send them."""
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -6,6 +6,8 @@ from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.message import Message
+from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, Input, Label, TextArea
 
@@ -14,45 +16,31 @@ from wifit3.campaigns.decloak import (
     PROBE_RESPONSE_WAIT_S,
     DecloakInput,
     candidates_from_sibling,
-    named_sibling_ssid,
 )
 from wifit3.dot11 import SSID_MAX_OCTETS
-from wifit3.models import AccessPoint
 from wifit3.persist.config import Config
 from wifit3.ui.path_picker import PathInput
-from wifit3.wlan.array import WlanArray
 
-SSID_TOKEN = "$ssid"
-TRUNCATE_BUDGETS_S = (300, 1200, 3600)
+TRUNCATE_SECONDS = (300, 1200, 3600)
 
 
 def sendable_ssids(names: Iterable[str]) -> list[str]:
-    """``names`` minus duplicates and anything over SSID_MAX_OCTETS, order kept."""
-    out: list[str] = []
+    """``names`` minus blanks, duplicates and anything over SSID_MAX_OCTETS, order kept."""
+    sendable: list[str] = []
     seen: set[str] = set()
     for name in names:
-        if name not in seen and len(name.encode("utf-8")) <= SSID_MAX_OCTETS:
+        if name.strip() and name not in seen and len(name.encode("utf-8")) <= SSID_MAX_OCTETS:
             seen.add(name)
-            out.append(name)
-    return out
+            sendable.append(name)
+    return sendable
 
 
-def expand_candidates(text: str, base: str) -> list[str]:
-    """One SSID per line, with SSID_TOKEN replaced by ``base``. Blank lines are skipped;
-    surviving lines keep their spacing, since an AP matches an SSID byte for byte. Raises
-    ValueError on a token with no base."""
-    expanded: list[str] = []
-    for line in text.splitlines():
-        if not line.strip():
-            continue
-        if SSID_TOKEN in line and not base:
-            raise ValueError(f"{SSID_TOKEN} needs a base SSID")
-        expanded.append(line.replace(SSID_TOKEN, base))
-    return sendable_ssids(expanded)
+def candidates_from_base(base_ssid: str, remembered: str) -> list[str]:
+    return sendable_ssids([remembered, *candidates_from_sibling(base_ssid)])
 
 
-def wordlist_names(path: Path) -> int:
-    """Lines in the file, counted a megabyte at a time: a wordlist can be gigabytes."""
+def line_count(path: Path) -> int:
+    """Counted a megabyte at a time: a wordlist can be gigabytes."""
     count, last = 0, b"\n"
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1 << 20), b""):
@@ -62,8 +50,7 @@ def wordlist_names(path: Path) -> int:
 
 
 def wordlist_head(path: Path, limit: int) -> list[str]:
-    """The first ``limit`` non-blank lines, byte for byte as written. A line that is not
-    UTF-8 is skipped: an SSID we cannot decode is one we cannot send."""
+    """The first ``limit`` non-blank lines."""
     names: list[str] = []
     if limit <= 0:
         return names
@@ -80,34 +67,16 @@ def wordlist_head(path: Path, limit: int) -> list[str]:
     return names
 
 
-def sweep_seconds(ssids: int, methods: DecloakInput) -> float:
-    """How long the run takes: every enabled method waits out its own reply window once per
-    SSID."""
-    per_ssid = (PROBE_RESPONSE_WAIT_S * methods.use_directed_probe
-                + PROBE_RESPONSE_WAIT_S * methods.use_broadcast_probe
-                + ASSOC_TIMEOUT_S * methods.use_authassoc_probe)
-    return ssids * per_ssid
+def seconds_per_ssid(methods: DecloakInput) -> float:
+    """Airtime one SSID costs across the enabled methods; 0 when none are enabled."""
+    return (PROBE_RESPONSE_WAIT_S * methods.use_directed_probe
+            + PROBE_RESPONSE_WAIT_S * methods.use_broadcast_probe
+            + ASSOC_TIMEOUT_S * methods.use_authassoc_probe)
 
 
-def ssids_within(budget_s: float, methods: DecloakInput) -> int:
-    """How many SSIDs fit in ``budget_s``; 0 when no method is enabled."""
-    one = sweep_seconds(1, methods)
-    return int(budget_s / one) if one else 0
-
-
-def candidate_prefill(base: str, remembered: Optional[str]) -> list[str]:
-    """One guess per sibling suffix, with an SSID remembered for this BSSID first."""
-    guesses = candidates_from_sibling(base)
-    return sendable_ssids([remembered, *guesses]) if remembered else guesses
-
-
-def decloak_defaults(array: WlanArray, ap: AccessPoint) -> tuple[str, list[str]]:
-    """The base SSID to offer and the candidate list to prefill."""
-    base = named_sibling_ssid(array, ap)
-    return base, candidate_prefill(base, Config.decloaked_ssid(ap.bssid))
-
-
-def _span(seconds: float) -> str:
+def _eta_text(seconds: float) -> str:
+    if seconds >= 172800:
+        return f"{seconds / 86400:.1f} d"
     if seconds >= 3600:
         return f"{seconds / 3600:.1f} h"
     if seconds >= 60:
@@ -115,8 +84,14 @@ def _span(seconds: float) -> str:
     return f"{seconds:.0f}s"
 
 
+class _TruncateButton(Button):
+    def __init__(self, seconds: int) -> None:
+        super().__init__(f"{seconds // 60} min", compact=True)
+        self.seconds = seconds
+
+
 class DecloakInputModal(ModalScreen[Optional[DecloakInput]]):
-    """Review the SSIDs a decloak sweep will send, and which methods will send them."""
+    """Select candidate SSIDs to probe for (guess) and the probing method."""
 
     BINDINGS = [Binding("escape", "cancel", "Cancel", show=True)]
 
@@ -126,201 +101,189 @@ class DecloakInputModal(ModalScreen[Optional[DecloakInput]]):
         width: 64; height: auto; max-height: 90%; overflow-y: auto;
         border: thick $primary; background: $surface; padding: 1 2;
     }
-    DecloakInputModal #title { content-align: center middle; text-style: bold; }
+    DecloakInputModal #dialog > Label { width: 100%; }
+    DecloakInputModal #title {
+        content-align: center middle; text-style: bold; color: $accent; padding-bottom: 1;
+    }
     DecloakInputModal #hint { color: $text-muted; }
+    DecloakInputModal #sources { height: auto; }
+    DecloakInputModal #sources > * { width: 1fr; }
     DecloakInputModal TextArea { height: 8; margin-bottom: 1; }
-    DecloakInputModal PathInput { margin-bottom: 1; }
     DecloakInputModal #methods { height: auto; }
     DecloakInputModal #methods Checkbox {
         border: none; height: 1; padding: 0 1; background: transparent;
     }
-    DecloakInputModal #warn { color: $error; display: none; }
-    DecloakInputModal #truncate { height: 1; display: none; }
+    DecloakInputModal #truncate { height: 1; }
     DecloakInputModal #truncate Label { padding: 0 1 0 0; color: $text-muted; }
-    DecloakInputModal #button-row { height: auto; align: center middle; }
+    DecloakInputModal #truncate Button { background: $panel; }
+    DecloakInputModal #truncate Button.-primary { background: $primary; }
+    DecloakInputModal #status {
+        content-align: center middle; color: $text-muted; padding-top: 1;
+    }
+    DecloakInputModal #status.-error { color: $error; }
+    DecloakInputModal #button-row { height: auto; align: center middle; padding-top: 1; }
     """
 
-    def __init__(self, bssid: str, base: str, prefill: list[str],
-                 chosen: Optional[DecloakInput] = None) -> None:
+    wordlist_lines: reactive[int] = reactive(0)
+    truncate_seconds: reactive[Optional[int]] = reactive(None)
+
+    def __init__(self, bssid: str, base_ssid: str) -> None:
         super().__init__()
         self._bssid = bssid
-        start = chosen or DecloakInput()
-        self._base = Input(value=base, placeholder="base SSID (optional)", id="base")
-        self._generated_from = base            # the base the list was last built from
-        self._generated = "\n".join(prefill)   # the list as we last wrote it; see _base_changed
-        self._candidates = TextArea(self._generated, id="candidates")
-        self._remembered = Config.decloaked_ssid(bssid)
-        self._wordlist_input = PathInput("", title="Select wordlist",
-                                         placeholder="wordlist file (optional)", id="wordlist")
-        self._directed = Checkbox("Directed Probe Requests",
-                                  value=start.use_directed_probe, id="use-directed")
-        self._broadcast = Checkbox("Broadcast Probe Requests",
-                                   value=start.use_broadcast_probe, id="use-broadcast")
-        self._authassoc = Checkbox("Auth + Association Requests",
-                                   value=start.use_authassoc_probe, id="use-authassoc")
-        self._warn = Label("", id="warn")
-        self._truncate_row = Horizontal(id="truncate")
-        self._accept_button = Button("Decloak", variant="primary", id="btn-accept")
-        self._wordlist: Optional[Path] = None   # picked file, sent after the typed list
-        self._wordlist_names = 0
-        self._budget_s: Optional[int] = None    # None sends every candidate, however long
-        self._reviewed = False
-        self.warning = ""                 # last message shown in #warn, for tests
+        self._base_ssid = base_ssid
 
     def compose(self) -> ComposeResult:
+        defaults = DecloakInput()
+        wordlist = PathInput("", title="Select wordlist", placeholder="wordlist file",
+                             id="wordlist")
+        wordlist.tooltip = "Load the list of SSIDs from a text file (1 SSID per line)"
         with Vertical(id="dialog"):
-            yield Label(f"Decloak {self._bssid}", id="title")
-            yield Label(f"One SSID per line. {SSID_TOKEN} becomes the base SSID.", id="hint")
-            yield self._base
-            yield self._candidates
-            yield self._wordlist_input
+            yield Label(f"Decloak Hidden Network ({self._bssid})", id="title")
+            yield Label("Enter base SSID [i]or[/i] load list of SSIDs from file:", id="hint")
+            with Horizontal(id="sources"):
+                yield Input(self._base_ssid, placeholder="base SSID", id="base-ssid",
+                            tooltip="Enter a common [i]prefix[/i] and auto-populate "
+                                    "potential suffixes")
+                yield wordlist
+            yield TextArea("\n".join(self._guesses(self._base_ssid)), id="candidates")
             with Vertical(id="methods"):
-                yield self._directed
-                yield self._broadcast
-                yield self._authassoc
-            yield self._warn
-            with self._truncate_row:
+                yield Checkbox(
+                    "Directed Probe Requests", defaults.use_directed_probe, id="use-directed",
+                    tooltip="Send probes directly to the AP (only decloaks the targeted AP). "
+                            "Retries/ACKs, fast.")
+                yield Checkbox(
+                    "Broadcast Probe Requests", defaults.use_broadcast_probe,
+                    id="use-broadcast",
+                    tooltip="Send a broadcast probe (to all APs), potentially decloaking "
+                            "other APs. No retries/ACKs (lossy), fast.")
+                yield Checkbox(
+                    "Auth + Association Requests", defaults.use_authassoc_probe,
+                    id="use-authassoc",
+                    tooltip="Authenticate & associate with the target AP for each guess. "
+                            "Retries/ACKs, but slower than probes.")
+            with Horizontal(id="truncate"):
                 yield Label("Truncate:")
-                for budget in TRUNCATE_BUDGETS_S:
-                    yield Button(f"{budget // 60} min", id=f"truncate-{budget}", compact=True)
+                for seconds in TRUNCATE_SECONDS:
+                    yield _TruncateButton(seconds)
+            yield Label("", id="status")
             with Horizontal(id="button-row"):
-                yield self._accept_button
-                yield Button("Cancel", id="btn-cancel")
+                yield Button("Decloak", variant="primary", id="accept")
+                yield Button("Cancel", id="cancel")
 
-    def _set_warn(self, message: str) -> None:
-        self.warning = message
-        self._warn.update(message)
-        self._warn.display = bool(message)
+    def watch_wordlist_lines(self) -> None:
+        self._update_estimate()
 
-    def _chosen_methods(self) -> DecloakInput:
-        return DecloakInput([], self._directed.value, self._broadcast.value,
-                            self._authassoc.value)
+    def watch_truncate_seconds(self) -> None:
+        self._update_estimate()
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button is self._accept_button:
-            self._accept()
-        elif event.button.id and event.button.id.startswith("truncate-"):
-            self._truncate(int(event.button.id.removeprefix("truncate-")))
-        elif event.button.id == "btn-cancel":
-            self.dismiss(None)
+    @on(Checkbox.Changed)
+    @on(TextArea.Changed)
+    def _method_or_list_edited(self, event: Message) -> None:
+        self._update_estimate()
 
-    def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
-        self._unreview()
-        self._set_warn("")
-
-    @on(Input.Changed, "#base")
-    def _base_changed(self, event: Input.Changed) -> None:
-        """Re-guess from the new base, unless the list has been hand-edited: the base is there
-        to drive the list, but once the user has typed in it the list is theirs. Input posts
-        this on mount too, which must not overwrite the prefill we were handed."""
-        if event.value == self._generated_from or self._candidates.text != self._generated:
-            return
-        self._generated_from = event.value
-        self._fill_candidates(candidate_prefill(event.value, self._remembered))
-        self._unreview()
-        self._set_warn("")
-
-    def _fill_candidates(self, ssids: list[str]) -> None:
-        self._generated = "\n".join(ssids)
-        self._candidates.load_text(self._generated)
+    @on(Input.Changed, "#base-ssid")
+    def _base_ssid_edited(self, event: Input.Changed) -> None:
+        if event.value:
+            self.query_one("#wordlist", Input).value = ""
+        self.query_one("#candidates", TextArea).load_text(
+            "\n".join(self._guesses(event.value)))
 
     @on(Input.Changed, "#wordlist")
-    def _wordlist_chosen(self, event: Input.Changed) -> None:
-        """Count the file and decide how much of it a run can afford. Only as much as the
-        budget allows is ever read, so a rockyou-sized list costs one pass to count."""
+    def _wordlist_picked(self, event: Input.Changed) -> None:
         path = Path(event.value)
-        if not event.value or not path.is_file():
+        if event.value and not path.is_file():
+            return                                  # still being typed
+        self.query_one("#candidates", TextArea).display = not event.value
+        if not event.value:
+            self.wordlist_lines = 0
             return
         try:
-            names = wordlist_names(path)
+            lines = line_count(path)
         except OSError as exc:
-            self._set_warn(f"{path.name}: {exc.strerror or exc}")
+            self._set_status(f"{path.name}: {exc.strerror or exc}", error=True)
             return
-        methods = self._chosen_methods()
-        self._wordlist, self._wordlist_names = path, names
-        whole = sweep_seconds(names, methods)
-        if names <= ssids_within(TRUNCATE_BUDGETS_S[-1], methods):
-            self._budget_s = None
-            self._set_warn(f"{path.name}: {names:,} names, {_span(whole)}")
-        else:
-            self._budget_s = TRUNCATE_BUDGETS_S[0]
-            self._set_warn(f"{path.name}: {names:,} names, {_span(whole)} in full "
-                           f"- truncated to {self._budget_s // 60} min")
-        self._truncate_row.display = True
-        self._unreview()
+        if lines * seconds_per_ssid(self._picked_methods()) > TRUNCATE_SECONDS[-1]:
+            self.truncate_seconds = TRUNCATE_SECONDS[0]
+        self.wordlist_lines = lines
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if isinstance(event.button, _TruncateButton):
+            seconds = event.button.seconds
+            self.truncate_seconds = None if self.truncate_seconds == seconds else seconds
+        elif event.button.id == "accept":
+            self._accept()
+        elif event.button.id == "cancel":
+            self.dismiss(None)
 
     def action_cancel(self) -> None:
         self.dismiss(None)
 
-    def _unreview(self) -> None:
-        """Send the dialog back to its review step: the plan changed under the user."""
-        self._reviewed = False
-        self._accept_button.label = "Decloak"
+    def _guesses(self, base_ssid: str) -> list[str]:
+        return candidates_from_base(base_ssid, Config.decloaked_ssid(self._bssid) or "")
 
-    def _plan(self) -> Optional[tuple[list[str], list[str]]]:
-        """(the typed list the run will send, every SSID it will send), or None once the
-        reason it cannot be built is in #warn. The budget cuts the typed list too, so what
-        the box ends up showing is what goes out; the wordlist's share is counted, not shown."""
-        methods = self._chosen_methods()
-        try:
-            typed = expand_candidates(self._candidates.text, self._base.value)
-        except ValueError as exc:
-            self._set_warn(str(exc))
-            return None
-        limit = ssids_within(self._budget_s, methods) if self._budget_s else None
-        if limit is not None:
-            typed = typed[:limit]
-        ssids = typed
-        if self._wordlist is not None:
-            room = self._wordlist_names if limit is None else max(0, limit - len(ssids))
-            try:
-                ssids = sendable_ssids(ssids + wordlist_head(self._wordlist, room))
-            except OSError as exc:
-                self._set_warn(f"{self._wordlist.name}: {exc.strerror or exc}")
-                return None
-        return typed, ssids
+    def _picked_methods(self) -> DecloakInput:
+        return DecloakInput([], self.query_one("#use-directed", Checkbox).value,
+                            self.query_one("#use-broadcast", Checkbox).value,
+                            self.query_one("#use-authassoc", Checkbox).value)
 
-    def _plan_line(self, ssids: list[str], methods: DecloakInput) -> str:
-        enabled = sum((methods.use_directed_probe, methods.use_broadcast_probe,
-                       methods.use_authassoc_probe))
-        return (f"{len(ssids):,} SSIDs, {len(ssids) * enabled:,} requests, "
-                f"{_span(sweep_seconds(len(ssids), methods))}")
+    def _set_status(self, message: str, *, error: bool = False) -> None:
+        status = self.query_one("#status", Label)
+        status.update(message)
+        status.set_class(error, "-error")
 
-    def _truncate(self, budget_s: int) -> None:
-        """Cut the run to what fits ``budget_s``, taking the typed list first and filling the
-        rest from the wordlist."""
-        self._budget_s = budget_s
-        self._unreview()
-        plan = self._plan()
-        if plan is None:
+    def _update_estimate(self) -> None:
+        methods = self._picked_methods()
+        per_ssid = seconds_per_ssid(methods)
+        written = [line for line in self.query_one("#candidates", TextArea).text.splitlines()
+                   if line.strip()]
+        sendable = sendable_ssids(written)
+        ssid_count = self.wordlist_lines or len(sendable)
+        untruncated_eta = ssid_count * per_ssid
+
+        would_shorten = [seconds for seconds in TRUNCATE_SECONDS if untruncated_eta > seconds]
+        truncate = self.truncate_seconds if self.truncate_seconds in would_shorten else None
+        for button in self.query(_TruncateButton):
+            button.display = button.seconds in would_shorten
+            button.variant = "primary" if button.seconds == truncate else "default"
+        self.query_one("#truncate").display = bool(would_shorten)
+
+        if not per_ssid:
+            self._set_status("Pick at least one method", error=True)
             return
-        self._set_warn(f"{self._plan_line(plan[1], self._chosen_methods())} "
-                       f"(truncated to {budget_s // 60} min)")
+        if truncate:
+            ssid_count = min(ssid_count, int(truncate / per_ssid))
+        if not ssid_count:
+            self._set_status("No candidate SSIDs to send", error=True)
+            return
+        requests = ssid_count * sum((methods.use_directed_probe, methods.use_broadcast_probe,
+                                     methods.use_authassoc_probe))
+        status = (f"{ssid_count:,} SSIDs, {requests:,} requests, "
+                  f"ETA {_eta_text(ssid_count * per_ssid)}")
+        if truncate:
+            status += f" (truncated to {truncate // 60} min)"
+        if not self.wordlist_lines and len(written) > len(sendable):
+            status += f" ({len(written) - len(sendable):,} dropped)"
+        self._set_status(status)
 
     def _accept(self) -> None:
-        """First press normalises the list and shows what the run costs; the second sends it.
-        Seeing the exact SSIDs matters because an AP only answers a byte-for-byte match."""
-        methods = self._chosen_methods()
-        if not any((methods.use_directed_probe, methods.use_broadcast_probe,
-                    methods.use_authassoc_probe)):
-            self._set_warn("Pick at least one method")
+        methods = self._picked_methods()
+        per_ssid = seconds_per_ssid(methods)
+        if not per_ssid:
+            self._set_status("Pick at least one method", error=True)
             return
-        plan = self._plan()
-        if plan is None:
+        limit = int(self.truncate_seconds / per_ssid) if self.truncate_seconds else None
+        if self.wordlist_lines:
+            path = Path(self.query_one("#wordlist", Input).value)
+            try:
+                methods.candidate_ssids = sendable_ssids(
+                    wordlist_head(path, limit or self.wordlist_lines))
+            except OSError as exc:
+                self._set_status(f"{path.name}: {exc.strerror or exc}", error=True)
+                return
+        else:
+            methods.candidate_ssids = sendable_ssids(
+                self.query_one("#candidates", TextArea).text.splitlines())[:limit]
+        if not methods.candidate_ssids:
+            self._set_status("No candidate SSIDs to send", error=True)
             return
-        typed, ssids = plan
-        if not ssids:
-            self._set_warn("No candidate SSIDs to send")
-            return
-        normalised = "\n".join(typed)
-        if not self._reviewed or self._candidates.text != normalised:
-            self._fill_candidates(typed)
-            self._reviewed = True
-            self._accept_button.label = "Confirm"
-            self._truncate_row.display = (
-                self._wordlist is not None
-                or len(ssids) > ssids_within(TRUNCATE_BUDGETS_S[0], methods))
-            self._set_warn(f"{self._plan_line(ssids, methods)}. Confirm to send.")
-            return
-        methods.candidate_ssids = ssids
         self.dismiss(methods)

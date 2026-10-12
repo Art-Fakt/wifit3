@@ -34,72 +34,38 @@ ASSOC_TIMEOUT_S = 0.3
 SIBLING_SUFFIXES: list[str] = [
     "",
 
-    # 1. Guest Networks (Common across almost all OEMs)
-    "-Guest", "_Guest", " Guest",
-    "-guest", "_guest", " guest",
-    "-GUEST", "_GUEST", " GUEST",
-    "-Guest-WiFi", "_Guest_WiFi", "-Guest-Wi-Fi", "_Guest_Wi-Fi",
+    "-Guest",   "_Guest",   " Guest",
+    "-guest",   "_guest",   " guest",
+    "-GUEST",   "_GUEST",   " GUEST",
     "-Visitor", "_Visitor", " Visitor",
 
-    # 2. IoT / Smart Home (Segmented 2.4GHz networks)
-    "-IoT", "_IoT", " IoT",
-    "-iot", "_iot", " iot",
-    "-IOT", "_IOT", " IOT",
+    # IoT / Smart Home (Segmented 2.4GHz networks)
+    "-IoT",   "_IoT",   " IoT",
+    "-iot",   "_iot",   " iot",
+    "-IOT",   "_IOT",   " IOT",
     "-Smart", "_Smart", " Smart",
 
-    # 3. 2.4 GHz Band (Linksys, Asus, TP-Link, etc.)
-    "-2.4G", "_2.4G", " 2.4G",
+    "-2.4G",   "_2.4G",   " 2.4G",
     "-2.4GHz", "_2.4GHz", " 2.4GHz",
-    "-2G", "_2G", " 2G",
-    "-2", "_2",
+    "-2G",     "_2G",     " 2G",
+    "-2",      "_2",      " 2", "2",
 
-    # 4. 5 GHz Band (Linksys, Netgear, Asus, etc.)
-    "-5G", "_5G", " 5G",
+    "-5G",   "_5G",   " 5G",
     "-5GHz", "_5GHz", " 5GHz",
-    "-5", "_5",
+    "-5",    "_5",
 
-    # 5. 6 GHz Band (Modern WiFi 6E / WiFi 7 devices)
-    "-6G", "_6G", " 6G",
-    "-6GHz", "_6GHz", " 6GHz",
-    "-6", "_6",
+    # Guest <-> Band
+    "-Guest-2.4G", "_Guest_2G", "-Guest 2G", "-Guest-2.4G",
+    "-Guest-5G",   "_Guest_5G", "-Guest 5G", "-Guest-5G",
+    "-5G-GUEST", "_5G-GUEST", "-2.4G-GUEST", "_2.4G-GUEST",
+    "-5G_Guest", "_5G_Guest", "-2.4G_Guest", "_2.4G_Guest",
 
-    # 6. Extenders, Repeaters, and Mesh Nodes (Netgear, TP-Link)
+    # Extenders & Repeaters
     "-EXT", "_EXT", " EXT",
     "-Ext", "_Ext", " Ext",
     "-ext", "_ext", " ext",
     "-EXT2G", "_EXT2G", "-EXT5G", "_EXT5G",
-    "-RE", "_RE",  # Very common for TP-Link range extenders
-    "-Repeater", "_Repeater",
-    "-Mesh", "_Mesh",
-    "-Node", "_Node",
-    "-Plus", "_Plus",
-    "-backhaul", "-BH", "_BH", "-dwb", "_dwb",
-
-    # 7. Setup, Provisioning, and Admin (Various ISPs and Enterprise)
-    "-Setup", "_Setup", " Setup",
-    "-Config", "_Config",
-    "-admin", "_admin", "-Admin",
-    "_Auto_Login", "-Auto", "_Auto",
-
-    # 8. Network Segmentation (SMB / Corporate / Public)
-    "-Staff", "_Staff", " Staff",
-    "-Public", "_Public", " Public",
-    "-Private", "_Private", " Private",
-    "-Secure", "_Secure", " Secure",
-    "-Free", "_Free", " Free",
-    "-Main", "_Main", " Main",
-    "-Corp", "_Corp",
-
-    # 9. Wi-Fi Standard Designators
-    "-ax", "_ax",
-    "-ac", "_ac",
-    "-WiFi6", "_WiFi6",
-    "-WiFi6E", "_WiFi6E",
-    "-WiFi7", "_WiFi7",
-    
-    # 10. Combined Band + Segment (e.g., Netgear default logic)
-    "-5G-GUEST", "_5G-GUEST", "-2.4G-GUEST", "_2.4G-GUEST",
-    "-5G_Guest", "_5G_Guest", "-2.4G_Guest", "_2.4G_Guest"
+    "-RE", "_RE",
 ]
 
 
