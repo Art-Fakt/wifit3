@@ -52,6 +52,35 @@ Hashtopolis task creation.
 
 ------------
 
+### Auto-Decloak Known APs
+
+Opt-**in** only: `[ ] Auto-decloak known APs` in Preferences (`ui/pref.py`) plus
+`Config.auto_decloak_known = False` (`persist/config.py`).
+
+We already persist the SSID of every AP we have decloaked (`Config.decloaked_ssids`, BSSID ->
+SSID). When a card is tuned to a channel that carries one of those BSSIDs, and that AP is
+currently hidden, one directed Probe Request names it again. That is a 0.15s operation on a
+radio that is already on the right channel, and the answer is already in the config file, so
+there is no reason to make the user open the Decloak modal and press a button to re-learn
+something we know.
+
+Shape (undecided, several open questions):
+- Fire from Scanner, or at least from Focus.
+- One probe per channel hop: when `set_channel` completes, check whether any known-but-hidden
+  BSSID lives on the new channel, send one directed probe, and mark it tried for the session.
+  Never retry within a session, so a silent AP costs 0.15s once.
+- Log it at INFO: `auto-probing {bssid} with SSID "{ssid}"`, and mention it once during scanner
+  initialization (`treelog.branch`) so the user knows it is on.
+
+Open questions, all from the hop loop:
+- Fixed channel vs hopping. One probe per `set_channel` never fires for a user who is dwelling
+  on one channel, which is exactly when they are most likely to want it.
+- Campaign contention. Decloak *is* a campaign, so an auto-probe has to arbitrate against
+  `Campaign.active` the same way, and it is not obvious whether it should yield or interrupt.
+- Where the per-session attempt set lives. `Scanner` is the wrong owner if Focus also probes.
+
+------------
+
 ### EAP-MSCHAPv2 / PEAP via Evil Twin
 
 Most enterprise Wi-Fi is PEAP-MSCHAPv2, which cracks with hashcat `-m 5500` (DES half near-

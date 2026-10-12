@@ -679,6 +679,8 @@ class FocusViewV2(Screen):
             if result is not None:
                 self._log(treelog.leaf(_save_line(result)))
         elif ev.kind == CaptureKind.DECLOAK:
+            if Config.remember_decloak(ev.bssid, ev.ssid or ""):
+                self.app.persist_config()
             method_label = DECLOAK_METHOD_LABELS.get(ev.method or "", ev.method or "?")
             self._log(
                 f"[bold]Decloaked[/bold] [cyan]{escape(ev.bssid)}[/cyan] → "

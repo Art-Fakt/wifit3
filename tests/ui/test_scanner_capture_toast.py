@@ -50,3 +50,25 @@ async def test_scanner_withheld_handshake_is_log_only_no_toast():
         scanner._log_capture_event(ev, ap)
 
         assert toasts == [], toasts
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_usb_devices")
+async def test_a_passive_decloak_reaches_disk():
+    """Any reveal the sink makes (beacon leak, probe response, a reassoc after a deauth) must
+    be offered as a candidate next launch, not just one the Decloak campaign won."""
+    from wifit3.persist.config import Config, _PATH
+
+    app = WifiteApp()
+    async with app.run_test() as pilot:
+        app.push_screen("scanner")
+        await pilot.pause(0)
+        scanner = app.screen
+
+        ap = AccessPoint(bssid="aa:bb:cc:dd:ee:08", ssid="Songsong", channel=11)
+        ev = CaptureEvent(kind=CaptureKind.DECLOAK, bssid=ap.bssid, ssid=ap.ssid,
+                          method="reassoc_req")
+        scanner._log_capture_event(ev, ap)
+
+        assert Config.decloaked_ssids == {"aa:bb:cc:dd:ee:08": "Songsong"}
+        assert "Songsong" in _PATH.read_text("utf-8")
