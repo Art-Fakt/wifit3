@@ -54,6 +54,16 @@ def test_rtl8814_mainline_opt_in(monkeypatch):
     assert _driver_for(0x0BDA, 0x8813) == "RTL8814AUDriver"
 
 
+def test_rtl8814_pair_claims_the_same_ids():
+    """The DKMS port once claimed only 0bda:8813, so an Archer T9UH or a DWA-192 fell through
+    to no driver at all unless the user opted into mainline."""
+    from wifit3.chips.rtl8814au_dkms import SUPPORTED_IDS as dkms
+    from wifit3.chips.rtw88_8814au import SUPPORTED_IDS as mainline
+
+    assert {(e.vid, e.pid) for e in dkms} == {(e.vid, e.pid) for e in mainline}
+    assert (0x2357, 0x0106) in {(e.vid, e.pid) for e in dkms}
+
+
 def test_rtl8812_default_is_dkms(monkeypatch):
     monkeypatch.delenv("WIFIT3_RTL8812", raising=False)
     assert _driver_for(0x0BDA, 0x8812) == "Rtl8812auDkmsDriver"
