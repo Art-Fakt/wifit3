@@ -53,7 +53,7 @@
 | MediaTek MT7601U | 2.4 GHz | Generic unbranded "nano" dongles |
 | MediaTek MT7610U | 2.4 / 5 GHz | ALFA AWUS036**ACHM**, Panda PAU0B |
 | MediaTek MT7612U | 2.4 / 5 GHz | ALFA AWUS036**ACM** |
-| MediaTek MT7921AU | 2.4 / 5 GHz | ALFA AWUS036**AXML**, Panda PAU0F |
+| MediaTek MT7921AU | 2.4 / 5 GHz | ALFA AWUS036**AXM[L]**, Panda PAU0F |
 | MediaTek MT7925U | 2.4 / 5 GHz | Netgear A9000 |
 | Realtek RTL8812AU | 2.4 / 5 GHz | ALFA AWUS036**ACH** |
 | Realtek RTL8814AU | 2.4 / 5 GHz | ALFA AWUS1900 |
