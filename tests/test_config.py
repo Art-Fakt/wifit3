@@ -9,7 +9,7 @@ _DEFAULTS = {n: getattr(Config, n)
              for n in (
                  "theme", "scanner_sort", "scanner_sort_reverse", "scanner_sort_delay",
                  "silenced_bssids", "hide_silenced", "log_level", "captures_dir", "save_pcap",
-                 "hashcat_path", "wordlist_path", "decloaked_ssids")}
+                 "hashcat_path", "wordlist_path", "hashcat_args", "decloaked_ssids")}
 
 
 @pytest.fixture(autouse=True)
@@ -166,16 +166,19 @@ def test_unset_tool_paths_are_omitted_from_the_file(config_path):
     Config.save()
     text = config_path.read_text()
     assert "hashcat_path" not in text and "wordlist_path" not in text
+    assert "hashcat_args" not in text
 
 
 def test_tool_paths_round_trip_when_set(config_path):
     Config.hashcat_path = r"D:\tools\hashcat\hashcat.exe"
     Config.wordlist_path = r"D:\wordlists\Top29Million.txt"
+    Config.hashcat_args = "-a 0 -w 3"
     Config.save()
-    Config.hashcat_path = Config.wordlist_path = None
+    Config.hashcat_path = Config.wordlist_path = Config.hashcat_args = None
     Config.load()
     assert Config.hashcat_path == r"D:\tools\hashcat\hashcat.exe"
     assert Config.wordlist_path == r"D:\wordlists\Top29Million.txt"
+    assert Config.hashcat_args == "-a 0 -w 3"
 
 
 def test_empty_tool_path_loads_as_unset(config_path):

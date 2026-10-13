@@ -1,5 +1,6 @@
 import logging
 import os
+import shlex
 import subprocess
 import json
 from pathlib import Path
@@ -13,6 +14,11 @@ logger = logging.getLogger(__name__)
 
 _STILL_ACTIVE = 259                             # GetExitCodeProcess: process has not exited
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+
+def _split_args(raw: str) -> list[str]:
+    # posix=False to retain Windows backslashes. Strip unnecessary quotes.
+    return [token.strip('"') for token in shlex.split(raw, posix=False)]
 
 
 class HashcatTool(VaultTool):
@@ -39,6 +45,7 @@ class HashcatTool(VaultTool):
         if not Path(wordlist).is_file():
             raise ValueError(f"Wordlist not found: {wordlist}")
 
+        hashcat_args = str(config.get("hashcat_args") or "")
         hashcat_dir = str(Path(hashcat_exe).parent)
         abs_capture = str(Path(capture.path).resolve())
         abs_wordlist = str(Path(wordlist).resolve())
@@ -56,12 +63,13 @@ class HashcatTool(VaultTool):
         cmd = [
             hashcat_exe,
             "-m", "22000",
-            abs_capture,
-            abs_wordlist,
             "--potfile-path", potfile,
             "--status",
             "--status-json",
             "--status-timer", "1",
+            *_split_args(hashcat_args),
+            abs_capture,
+            abs_wordlist,
         ]
         
         creationflags = 0

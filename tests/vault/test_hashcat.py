@@ -1,9 +1,10 @@
+import logging
 import subprocess
 import sys
 
 import pytest
 
-from wifit3.vault.tools.hashcat import HashcatTool
+from wifit3.vault.tools.hashcat import HashcatTool, _split_args
 from wifit3.models import PersistedCapture
 from wifit3.models.access_point import CaptureType
 from wifit3.models.jobs import ToolStatus
@@ -141,3 +142,27 @@ def test_poll_status_adopts_running_via_live_pid(tmp_path):
         assert res.status == ToolStatus.RUNNING
     finally:
         proc.kill()
+
+
+def test_split_args_is_empty_for_blank_input():
+    assert _split_args("") == []
+
+
+def test_split_args_keeps_a_quoted_windows_path_intact():
+    assert _split_args(r'-w 3 --session "D:\my runs\a"') == ["-w", "3", "--session",
+                                                             r"D:\my runs\a"]
+
+
+def test_launch_puts_user_args_before_the_capture_and_wordlist(tmp_path, caplog):
+    """hashcat's usage is [options] hashfile dictionary, so a user option must land ahead of
+    both positionals."""
+    wordlist = tmp_path / "rockyou.txt"
+    wordlist.write_text("hunter2\n")
+    tool = HashcatTool()
+    with caplog.at_level(logging.INFO):
+        tracking = tool.launch(_cap(tmp_path), {"hashcat_exe": sys.executable,
+                                                "wordlist": str(wordlist),
+                                                "hashcat_args": "-w 3"})
+    tool._terminate(tracking["pid"])
+    launched = next(r.message for r in caplog.records if r.message.startswith("Launching "))
+    assert launched.index("-w 3") < launched.index("a.hc22000")

@@ -28,6 +28,7 @@ class Config:
     hide_silenced: bool = False
     hashcat_path: str | None = None
     wordlist_path: str | None = None
+    hashcat_args: str | None = None
 
     @classmethod
     def is_silenced(cls, bssid: str) -> bool:
@@ -78,6 +79,7 @@ class Config:
         cls.hide_silenced = bool(data.get("hide_silenced", cls.hide_silenced))
         cls.hashcat_path = _optional_str(data.get("hashcat_path"), cls.hashcat_path)
         cls.wordlist_path = _optional_str(data.get("wordlist_path"), cls.wordlist_path)
+        cls.hashcat_args = _optional_str(data.get("hashcat_args"), cls.hashcat_args)
 
     @classmethod
     def save(cls) -> None:
@@ -93,7 +95,7 @@ class Config:
             f"hide_silenced = {_fmt(cls.hide_silenced)}\n"
         )
         # TOML has no null: an unset path is an absent key, not an empty string.
-        for key in ("hashcat_path", "wordlist_path"):
+        for key in ("hashcat_path", "wordlist_path", "hashcat_args"):
             value = getattr(cls, key)
             if value:
                 text += f"{key} = {_fmt(value)}\n"
