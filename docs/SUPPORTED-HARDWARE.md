@@ -40,7 +40,7 @@ live in each chip's `<CHIP>.md` (linked under its table).
 
 ## Atheros Chipset
 ### AR9271
-<img align="right" width="140" src="../assets/cardart/stack-ar9271.png" alt="ALFA AWUS036NHA / TP-Link TL-WN722N / D-Link DWA-126">
+<img align="right" width="110" src="../assets/cardart/stack-ar9271.png" alt="ALFA AWUS036NHA / TP-Link TL-WN722N / D-Link DWA-126">
 
 *ALFA AWUS036NHA / TP-Link TL-WN722N / D-Link DWA-126 · 2.4 GHz*
 
@@ -129,7 +129,7 @@ live in each chip's `<CHIP>.md` (linked under its table).
 → [RTL8812AU_DKMS.md](../src/wifit3/chips/rtl8812au_dkms/RTL8812AU_DKMS.md) (default) · [RTL8812AU.md](../src/wifit3/chips/rtl8812au/RTL8812AU.md) (mainline)
 
 ### RTL8814AU
-<img align="right" width="140" height="159" src="../assets/cardart/card-awus1900.png" alt="ALFA AWUS1900">
+<img align="right" width="140" src="../assets/cardart/stack-rtl8814au.png" alt="ALFA AWUS1900 (top) / ASUS USB-AC68 (bottom)">
 
 *ALFA AWUS1900 · 2.4 / 5 GHz · 4T4R*
 
@@ -154,7 +154,7 @@ live in each chip's `<CHIP>.md` (linked under its table).
 → [RTL8814AU.md](../src/wifit3/chips/rtw88_8814au/RTL8814AU.md) (mainline) · [RTL8814AU_DKMS.md](../src/wifit3/chips/rtl8814au_dkms/RTL8814AU_DKMS.md) (default)
 
 ### RTL8821AU
-<img align="right" width="140" src="../assets/cardart/stack-rtl8821au.png" alt="ALFA AWUS036ACS (top) / Archer T2U+ (middle) / Archer T2U (bottom)">
+<img align="right" width="110" src="../assets/cardart/stack-rtl8821au.png" alt="ALFA AWUS036ACS (top) / Archer T2U+ (middle) / Archer T2U (bottom)">
 
 *ALFA AWUS036ACS / Archer T2U+ / Archer T2U · 2.4 / 5 GHz*
 
@@ -486,4 +486,6 @@ Kali: <https://github.com/morrownr/USB-WiFi/blob/main/home/Recommended_Adapters_
 
 **Wishlist (not yet bought):**
 
-- **TP-Link Archer T2U Plus**: RTL8821AU / RTL8811AU.
+- *Generic/no-name brand*: RTL8188FTV [PR#62](https://github.com/derv82/wifit3/pull/62) (verify port in PR)
+- **TP-Link TL-WN823N**:  RTL8192CU [Issue#71](https://github.com/derv82/wifit3/issues/71) (new port)
+- **Asus USB-AC68**: RTL8814AU [Issue#86](https://github.com/derv82/wifit3/issues/86) ("for the art")
