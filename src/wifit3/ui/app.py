@@ -176,8 +176,7 @@ class WifiteApp(App):
         """Toast each job the first time it finishes this session; jobs already terminal when
         the app started are recorded silently rather than re-announced."""
         terminal = (
-            ToolStatus.SUCCESS, ToolStatus.FAILURE, ToolStatus.ERROR,
-            ToolStatus.QUIT, ToolStatus.KILLED,
+            ToolStatus.SUCCESS, ToolStatus.FAILURE, ToolStatus.ERROR, ToolStatus.STOPPED,
         )
         cracked = False
         for job in self.active_jobs:
@@ -206,28 +205,24 @@ class WifiteApp(App):
             self.notify(f"SUCCESS  PSK: {key}", title=job.display_name, severity="information")
         elif job.status == ToolStatus.FAILURE:
             self.notify(f"NOT FOUND  {job.progress_msg}", title=job.display_name, severity="warning")
-        elif job.status == ToolStatus.QUIT:
-            self.notify("QUIT  Stopped by user", title=job.display_name, severity="information")
-        elif job.status == ToolStatus.KILLED:
-            self.notify("KILLED  Force-terminated by user", title=job.display_name, severity="warning")
+        elif job.status == ToolStatus.STOPPED:
+            self.notify("STOPPED  by user", title=job.display_name, severity="information")
         else:
             self.notify(f"ERROR  {job.progress_msg}", title=job.display_name, severity="error")
 
-    def kill_job(self, job_id: str) -> None:
-        """Kill a running job, then refresh the tracker immediately."""
-        if self.vault.manager.kill_job(job_id):
+    def stop_job(self, job_id: str) -> bool:
+        """Stop a running job, then refresh the tracker immediately."""
+        stopped = self.vault.manager.stop_job(job_id)
+        if stopped:
             self._poll_jobs()
-
-    def force_kill_job(self, job_id: str) -> bool:
-        """Force-kill a Hashcat job after its graceful-quit window expires."""
-        killed = self.vault.manager.force_kill_job(job_id)
-        if killed:
-            self._poll_jobs()
-        return killed
+        return stopped
 
     def skip_job_wordlist(self, job_id: str) -> bool:
-        """Ask a running Hashcat process to bypass its current dictionary."""
-        return self.vault.manager.skip_wordlist(job_id)
+        """Abandon the wordlist a running job is on and start it on the next one."""
+        skipped = self.vault.manager.skip_wordlist(job_id)
+        if skipped:
+            self._poll_jobs()
+        return skipped
 
     def clear_job(self, job_id: str) -> None:
         """Remove a finished job, then refresh the tracker immediately."""

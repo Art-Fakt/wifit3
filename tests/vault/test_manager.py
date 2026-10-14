@@ -1,16 +1,15 @@
+import json
 import pytest
 from unittest.mock import MagicMock, patch
 from wifit3.vault.manager import JobManager
-from wifit3.models.jobs import JobState, ToolCapability, ToolStatus, ToolResult
+from wifit3.models.jobs import JobAction, JobState, ToolCapability, ToolStatus, ToolResult
 from wifit3.models import PersistedCapture
 
 class DummyTool:
     def __init__(self, name="dummy", capabilities=ToolCapability.NONE):
         self.name = name
         self.capabilities = capabilities
-        self.killed = []
-        self.skipped = []
-        self.quit_requested = []
+        self.applied = []
 
     def can_crack(self, capture):
         return True
@@ -22,15 +21,8 @@ class DummyTool:
     def poll_status(self, job: JobState, assume_dead=False):
         return ToolResult(status=ToolStatus.RUNNING, value="Running...")
 
-    def kill(self, job: JobState):
-        self.killed.append(job.pid)
-
-    def request_quit(self, job: JobState):
-        self.quit_requested.append(job.pid)
-        return True
-
-    def skip_wordlist(self, job: JobState):
-        self.skipped.append(job.pid)
+    def apply(self, action: JobAction, job: JobState):
+        self.applied.append((action, job.pid))
         return True
 
 @pytest.fixture
@@ -68,65 +60,7 @@ def test_job_lifecycle(manager):
     assert job.progress_msg == "Cracked! Key: 1234"
 
 
-def test_kill_job_marks_user_quit_before_stopping_tool(manager):
-    from wifit3.models.access_point import CaptureType
-    cap = PersistedCapture(type=CaptureType.HS, timestamp=0, path="test.pcap",
-                           bssid="00:11:22:33:44:55")
-    tool = manager.tools["dummy"]
-    tool.capabilities = ToolCapability.KILLABLE
-    job_id = manager.submit_job("dummy", cap, {})
-    job = manager.jobs[job_id]
-    job.status = ToolStatus.RUNNING
-    job.pid = 1234
-
-    assert manager.kill_job(job_id) is True
-    assert job.config["quit_requested"] is True
-    assert job.config["quit_requested_at"] > 0
-    assert tool.quit_requested == [1234]
-    assert tool.killed == []
-
-
-def test_kill_job_falls_back_to_kill_when_no_quit_channel(manager):
-    from wifit3.models.access_point import CaptureType
-    cap = PersistedCapture(type=CaptureType.HS, timestamp=0, path="test.pcap",
-                           bssid="00:11:22:33:44:55")
-    tool = manager.tools["dummy"]
-    tool.capabilities = ToolCapability.KILLABLE
-    tool.request_quit = lambda tracking: False
-    job_id = manager.submit_job("dummy", cap, {})
-    job = manager.jobs[job_id]
-    job.status = ToolStatus.RUNNING
-    job.pid = 1234
-
-    assert manager.kill_job(job_id) is True
-    assert tool.killed == [1234]
-    assert job.config["force_killed"] is True
-    assert "quit_requested" not in job.config
-
-
-def test_force_kill_requires_five_second_grace_period(manager, monkeypatch):
-    from wifit3.models.access_point import CaptureType
-    cap = PersistedCapture(type=CaptureType.HS, timestamp=0, path="test.pcap",
-                           bssid="00:11:22:33:44:55")
-    tool = manager.tools["dummy"]
-    tool.capabilities = ToolCapability.KILLABLE
-    job_id = manager.submit_job("dummy", cap, {})
-    job = manager.jobs[job_id]
-    job.status = ToolStatus.RUNNING
-    job.pid = 1234
-    job.config = {"quit_requested": True, "quit_requested_at": 100.0}
-
-    monkeypatch.setattr("wifit3.vault.manager.time.time", lambda: 104.9)
-    assert manager.force_kill_job(job_id) is False
-    assert tool.killed == []
-
-    monkeypatch.setattr("wifit3.vault.manager.time.time", lambda: 105.0)
-    assert manager.force_kill_job(job_id) is True
-    assert job.config["force_killed"] is True
-    assert tool.killed == [1234]
-
-
-def test_skip_wordlist_requires_multiple_resolved_wordlists(manager):
+def _running_job(manager, actions=JobAction.STOP):
     from wifit3.models.access_point import CaptureType
     cap = PersistedCapture(type=CaptureType.HS, timestamp=0, path="test.pcap",
                            bssid="00:11:22:33:44:55")
@@ -134,13 +68,86 @@ def test_skip_wordlist_requires_multiple_resolved_wordlists(manager):
     job = manager.jobs[job_id]
     job.status = ToolStatus.RUNNING
     job.pid = 1234
-    job.tool_state["wordlists"] = ["one.txt", "two.txt"]
+    job.actions = actions
+    return job_id, job
+
+
+def test_stop_job_hands_the_stop_to_the_tool(manager):
+    job_id, job = _running_job(manager)
+
+    assert manager.stop_job(job_id) is True
+    assert manager.tools["dummy"].applied == [(JobAction.STOP, 1234)]
+
+
+def test_skip_wordlist_hands_the_skip_to_the_tool(manager):
+    job_id, job = _running_job(manager, JobAction.STOP | JobAction.SKIP)
 
     assert manager.skip_wordlist(job_id) is True
-    assert manager.tools["dummy"].skipped == [1234]
+    assert manager.tools["dummy"].applied == [(JobAction.SKIP, 1234)]
 
-    job.tool_state["wordlists"] = ["one.txt"]
+
+def test_an_action_the_job_does_not_offer_is_refused(manager):
+    job_id, job = _running_job(manager, JobAction.STOP)
+
     assert manager.skip_wordlist(job_id) is False
+    assert manager.tools["dummy"].applied == []
+
+
+def test_actions_of_a_queued_job_are_clear_only(manager):
+    from wifit3.models.access_point import CaptureType
+    cap = PersistedCapture(type=CaptureType.HS, timestamp=0, path="test.pcap",
+                           bssid="00:11:22:33:44:55")
+    job_id = manager.submit_job("dummy", cap, {})
+
+    assert manager.stop_job(job_id) is False
+    assert manager.tools["dummy"].applied == []
+
+
+def test_poll_offers_the_tools_actions_while_running_and_clear_once_finished(manager):
+    from wifit3.models.access_point import CaptureType
+    cap = PersistedCapture(type=CaptureType.HS, timestamp=0, path="test.pcap",
+                           bssid="00:11:22:33:44:55")
+    manager.vault.all_captures.return_value = [cap]
+    job_id = manager.submit_job("dummy", cap, {})
+    job = manager.jobs[job_id]
+    tool = manager.tools["dummy"]
+
+    with patch.object(tool, "poll_status") as mock_poll:
+        mock_poll.return_value = ToolResult(status=ToolStatus.RUNNING, value="Running (1%)",
+                                            actions=JobAction.STOP | JobAction.SKIP)
+        manager.poll_jobs()        # launches
+        manager.poll_jobs()        # polls
+        assert job.actions == JobAction.STOP | JobAction.SKIP
+
+        mock_poll.return_value = ToolResult(status=ToolStatus.FAILURE, value="rockyou.txt")
+        manager.poll_jobs()
+
+    assert job.status == ToolStatus.FAILURE
+    assert job.actions == JobAction.CLEAR
+
+
+def test_poll_persists_a_tool_that_moved_the_job_on_without_changing_status(manager):
+    """The tool advancing its own queue (new pid, new tool_state) must reach jobs.json."""
+    from wifit3.models.access_point import CaptureType
+    cap = PersistedCapture(type=CaptureType.HS, timestamp=0, path="test.pcap",
+                           bssid="00:11:22:33:44:55")
+    manager.vault.all_captures.return_value = [cap]
+    job_id = manager.submit_job("dummy", cap, {})
+    job = manager.jobs[job_id]
+    manager.poll_jobs()
+    job.progress_msg = "Running..."
+
+    def _advance(polled, assume_dead=False):
+        polled.pid = 5678
+        polled.tool_state["index"] = 1
+        return ToolResult(status=ToolStatus.RUNNING, value="Running...", actions=JobAction.STOP)
+
+    with patch.object(manager.tools["dummy"], "poll_status", side_effect=_advance):
+        manager._save.reset_mock()
+        manager.poll_jobs()
+
+    assert job.pid == 5678
+    assert manager._save.called
 
 
 def test_crack_success_persists_key(manager, tmp_path, monkeypatch):
@@ -277,8 +284,8 @@ def test_kill_all_running_respects_killable(manager):
 
     manager.kill_all_running()
 
-    assert killable.killed == [1234]
-    assert headless.killed == []
+    assert killable.applied == [(JobAction.STOP, 1234)]
+    assert headless.applied == []
 
 
 def test_kill_all_running_leaves_adoptable_alive(manager):
@@ -295,7 +302,7 @@ def test_kill_all_running_leaves_adoptable_alive(manager):
 
     manager.kill_all_running()
 
-    assert adoptable.killed == []
+    assert adoptable.applied == []
 
 
 def test_load_skips_bad_entry_keeps_good(tmp_path, monkeypatch):
@@ -310,3 +317,17 @@ def test_load_skips_bad_entry_keeps_good(tmp_path, monkeypatch):
     mgr = JobManager(MagicMock())   # __init__ runs the real _load
 
     assert "g" in mgr.jobs and "b" not in mgr.jobs
+
+
+def test_a_finished_job_loaded_from_disk_can_still_be_cleared(tmp_path, mocker):
+    """jobs.json has no actions column: they are derived, so a restart must not strand a job."""
+    mocker.patch("wifit3.vault.manager.JobManager._save")
+    mocker.patch("wifit3.persist.config.Config.captures_dir", str(tmp_path))
+    (tmp_path / "jobs.json").write_text(json.dumps({"j1": {
+        "job_id": "j1", "tool_name": "hashcat", "capture_path": "a.hc22000",
+        "status": "FAILURE", "progress_msg": "3 wordlists",
+    }}), encoding="utf-8")
+
+    manager = JobManager(MagicMock())
+
+    assert manager.jobs["j1"].actions == JobAction.CLEAR

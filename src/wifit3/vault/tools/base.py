@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 
 from wifit3.models import PersistedCapture, ToolCapability, ToolResult
-from wifit3.models.jobs import JobState
+from wifit3.models.jobs import JobAction, JobState
 
 class VaultTool(ABC):
     name: str
@@ -22,9 +22,10 @@ class VaultTool(ABC):
     @abstractmethod
     def poll_status(self, job: JobState, assume_dead: bool = False) -> ToolResult:
         """Tails the physical log file, or queries remote API (via urllib). When
-        ``assume_dead`` is set the process is known gone; resolve final status from output."""
+        ``assume_dead`` is set the process is known gone; resolve final status from output.
+        The result's ``actions`` are what the job will accept until the next poll."""
         pass
 
-    def kill(self, job: JobState) -> None:
-        """Kill the running job if KILLABLE."""
-        pass
+    def apply(self, action: JobAction, job: JobState) -> bool:
+        """Carry out one of the ``actions`` the last poll offered; whether it took effect."""
+        return False

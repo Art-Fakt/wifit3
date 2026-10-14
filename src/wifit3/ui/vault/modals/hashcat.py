@@ -108,7 +108,7 @@ class HashcatConfigModal(ModalScreen[dict]):
             self._remember(exe, wordlist, args)
             self.dismiss({
                 "hashcat_exe": exe,
-                "wordlist": wordlist,
+                "wordlists": [wordlist],
                 "hashcat_args": args
             })
 

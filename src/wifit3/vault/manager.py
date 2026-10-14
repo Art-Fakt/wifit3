@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from wifit3.models import PersistedCapture
-from wifit3.models.jobs import JobState, ToolCapability, ToolStatus, ToolResult
+from wifit3.models.jobs import JobAction, JobState, ToolCapability, ToolStatus, ToolResult
 from wifit3.vault.tools.base import VaultTool
 from wifit3.vault.tools.hashcat import HashcatTool
 from wifit3.persist.common import parse_hc22000
@@ -14,6 +14,12 @@ from wifit3.persist.config import Config
 
 
 logger = logging.getLogger(__name__)
+
+
+def _set_actions(job: JobState, offered: JobAction) -> None:
+    """What the UI may offer: the tool's own actions, plus removing a job that is not running."""
+    clearable = JobAction.NONE if job.status == ToolStatus.RUNNING else JobAction.CLEAR
+    job.actions = offered | clearable
 
 
 class JobManager:
@@ -43,6 +49,7 @@ class JobManager:
         for k, v in data.items():
             try:
                 self.jobs[k] = JobState.from_dict(v)
+                _set_actions(self.jobs[k], JobAction.NONE)
             except Exception:
                 logger.exception(f"Skipping unreadable job entry {k!r} in {jobs_file}")
 
@@ -78,6 +85,7 @@ class JobManager:
                         job.progress_msg = res.value or "Process ended while wifit3 was closed."
                     self._persist_cracked_key(job, res)
                     changed = True
+                _set_actions(job, res.actions)
             except Exception as exc:
                 logger.exception(f"Failed to reconcile job {job_id}")
                 job.status = ToolStatus.ERROR
@@ -115,6 +123,7 @@ class JobManager:
             j.tool_name for j in self.jobs.values() if j.status == ToolStatus.RUNNING)
 
         for job_id, job in list(self.jobs.items()):
+            _set_actions(job, JobAction.NONE)       # a running job's own actions come from its poll
             tool = self.tools.get(job.tool_name)
             if not tool:
                 logger.warning(f"Unable to find tool for job ID {job_id}: '{job.tool_name}' not found")
@@ -140,6 +149,7 @@ class JobManager:
                     tool.launch(job, cap)
                     job.status = ToolStatus.RUNNING
                     job.progress_msg = "Starting..."
+                    _set_actions(job, JobAction.STOP)
                     changed = True
                     running_by_tool[job.tool_name] += 1
                 except Exception as exc:
@@ -150,6 +160,7 @@ class JobManager:
 
             elif job.status == ToolStatus.RUNNING:
                 try:
+                    tracked = job.to_dict()
                     res = tool.poll_status(job)
                     if res.status != job.status or res.value != job.progress_msg:
                         logger.info(f"Changed status for job ID {job_id}: {res}")
@@ -158,6 +169,9 @@ class JobManager:
                             job.progress_msg = res.value
                         self._persist_cracked_key(job, res)
                         changed = True
+                    elif job.to_dict() != tracked:
+                        changed = True      # the tool moved the job on (its next wordlist)
+                    _set_actions(job, res.actions)
                 except Exception as exc:
                     logger.exception(f"Error while polling status for job ID {job_id}")
                     job.status = ToolStatus.ERROR
@@ -205,48 +219,24 @@ class JobManager:
                     return None
         return None
 
-    def kill_job(self, job_id: str) -> bool:
-        job = self.jobs.get(job_id)
-        if job is None or job.status != ToolStatus.RUNNING:
-            return False
-        tool = self.tools.get(job.tool_name)
-        if tool is None or ToolCapability.KILLABLE not in tool.capabilities:
-            return False
-        if hasattr(tool, "request_quit") and tool.request_quit(job):
-            job.config["quit_requested"] = True
-            job.config["quit_requested_at"] = time.time()
-            self._save()
-            return True
-        # No private stdin to ask on (job adopted from a previous session): kill it outright.
-        job.config["force_killed"] = True
-        self._save()
-        tool.kill(job)
-        return True
-
-    def force_kill_job(self, job_id: str) -> bool:
-        job = self.jobs.get(job_id)
-        if job is None or job.status != ToolStatus.RUNNING:
-            return False
-        requested_at = float(job.config.get("quit_requested_at", 0))
-        if not job.config.get("quit_requested") or time.time() - requested_at < 5.0:
-            return False
-        tool = self.tools.get(job.tool_name)
-        if tool is None or ToolCapability.KILLABLE not in tool.capabilities:
-            return False
-        job.config["force_killed"] = True
-        self._save()
-        tool.kill(job)
-        return True
+    def stop_job(self, job_id: str) -> bool:
+        """Stop a running job; it reports STOPPED once its process is gone."""
+        return self._run_action(job_id, JobAction.STOP)
 
     def skip_wordlist(self, job_id: str) -> bool:
+        """Move a running job on to the next item of its queue, abandoning the current one."""
+        return self._run_action(job_id, JobAction.SKIP)
+
+    def _run_action(self, job_id: str, action: JobAction) -> bool:
+        """Hand one of the actions the last poll offered to the owning tool."""
         job = self.jobs.get(job_id)
-        if job is None or job.status != ToolStatus.RUNNING:
+        if job is None or action not in job.actions:
             return False
-        wordlists = job.tool_state.get("wordlists") or []
         tool = self.tools.get(job.tool_name)
-        if len(wordlists) < 2 or tool is None or not hasattr(tool, "skip_wordlist"):
+        if tool is None or not tool.apply(action, job):
             return False
-        return tool.skip_wordlist(job)
+        self._save()
+        return True
 
     def clear_job(self, job_id: str) -> None:
         """Drop a finished job from the list and persist."""
@@ -256,6 +246,7 @@ class JobManager:
     def kill_all_running(self) -> None:
         """Shutdown: leave ADOPTABLE tools running (re-attached next launch), kill other KILLABLE
         ones so they aren't orphaned."""
+        killed = False
         for job in self.jobs.values():
             if job.status != ToolStatus.RUNNING:
                 continue
@@ -266,9 +257,11 @@ class JobManager:
             if ToolCapability.ADOPTABLE in caps or ToolCapability.KILLABLE not in caps:
                 continue
             try:
-                tool.kill(job)
+                killed = tool.apply(JobAction.STOP, job) or killed
             except Exception:
                 logger.exception(f"Failed to kill job {job.job_id} on shutdown")
+        if killed:
+            self._save()
 
     def get_active_jobs(self) -> List[JobState]:
         # Return all jobs, sorted by most recently added.

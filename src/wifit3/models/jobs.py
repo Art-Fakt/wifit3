@@ -8,14 +8,20 @@ class ToolCapability(IntFlag):
     SINGLETON = auto()      # only one instance of this tool may run at a time
     ADOPTABLE = auto()      # process outlives the app; adopt it on relaunch, don't kill on exit
 
+class JobAction(IntFlag):
+    """What a job will accept right now; recomputed on every poll, never persisted."""
+    NONE = 0
+    STOP = auto()
+    SKIP = auto()
+    CLEAR = auto()
+
 class ToolStatus(str, Enum):
     QUEUED = "QUEUED"
     RUNNING = "RUNNING"
     SUCCESS = "SUCCESS"
     FAILURE = "FAILURE"
     ERROR = "ERROR"
-    QUIT = "QUIT"
-    KILLED = "KILLED"
+    STOPPED = "STOPPED"
 
 @dataclass
 class JobState:
@@ -32,10 +38,12 @@ class JobState:
     api_id: Optional[str] = None
     config: dict[str, Any] = field(default_factory=dict)        # launch request from the tool's modal
     tool_state: dict[str, Any] = field(default_factory=dict)    # tool-owned; no caller reads inside it
+    actions: JobAction = JobAction.NONE                         # derived each poll, not persisted
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data["status"] = self.status.value
+        del data["actions"]
         return data
 
     @classmethod
@@ -54,3 +62,4 @@ class ToolResult:
     status: ToolStatus
     value: Optional[str] = None # The progress string or error msg
     result_data: Optional[dict] = None # Extra data (e.g. {"key": "0xdeadbeef"})
+    actions: JobAction = JobAction.NONE

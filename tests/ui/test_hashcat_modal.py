@@ -98,7 +98,7 @@ async def test_saved_args_prefill_the_modal_and_come_back_on_launch():
         app.screen.query_one("#hashcat-launch", Button).press()
         await pilot.pause(0)
 
-    assert dismissed == [{"hashcat_exe": r"D:\hashcat.exe", "wordlist": r"D:\rockyou.txt",
+    assert dismissed == [{"hashcat_exe": r"D:\hashcat.exe", "wordlists": [r"D:\rockyou.txt"],
                           "hashcat_args": "-w 3 --self-test-disable"}]
 
 
