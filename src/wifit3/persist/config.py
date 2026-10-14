@@ -28,7 +28,7 @@ class Config:
     hide_silenced: bool = False
     wps_auto_pbc: bool = True
     hashcat_path: str | None = None
-    wordlist_path: str | None = None
+    wordlist_paths: list[str] = []
     hashcat_args: str | None = None
 
     @classmethod
@@ -80,7 +80,8 @@ class Config:
         cls.hide_silenced = bool(data.get("hide_silenced", cls.hide_silenced))
         cls.wps_auto_pbc = bool(data.get("wps_auto_pbc", cls.wps_auto_pbc))
         cls.hashcat_path = _optional_str(data.get("hashcat_path"), cls.hashcat_path)
-        cls.wordlist_path = _optional_str(data.get("wordlist_path"), cls.wordlist_path)
+        cls.wordlist_paths = _paths(data.get("wordlist_paths"), data.get("wordlist_path"),
+                                    cls.wordlist_paths)
         cls.hashcat_args = _optional_str(data.get("hashcat_args"), cls.hashcat_args)
 
     @classmethod
@@ -97,11 +98,13 @@ class Config:
             f"hide_silenced = {_fmt(cls.hide_silenced)}\n"
             f"wps_auto_pbc = {_fmt(cls.wps_auto_pbc)}\n"
         )
+        if cls.wordlist_paths:
+            text += f"wordlist_paths = {_fmt(cls.wordlist_paths)}\n"
         # TOML has no null: an unset path is an absent key, not an empty string.
-        for key in ("hashcat_path", "wordlist_path", "hashcat_args"):
-            value = getattr(cls, key)
-            if value:
-                text += f"{key} = {_fmt(value)}\n"
+        if cls.hashcat_path:
+            text += f"hashcat_path = {_fmt(cls.hashcat_path)}\n"
+        if cls.hashcat_args:
+            text += f"hashcat_args = {_fmt(cls.hashcat_args)}\n"
         if cls.decloaked_ssids:
             text += "\n[decloak]\n"
             for bssid, ssid in sorted(cls.decloaked_ssids.items()):
@@ -111,6 +114,15 @@ class Config:
             _PATH.write_text(text, encoding="utf-8")
         except OSError as e:
             raise ConfigError(f"Failed to save config at {_PATH}: {e}") from e
+
+
+def _paths(raw: object, legacy: object, current: list[str]) -> list[str]:
+    """The stored wordlists; the single ``wordlist_path`` of an older config still counts."""
+    if isinstance(raw, list):
+        return [str(path) for path in raw if str(path)]
+    if legacy:
+        return [str(legacy)]
+    return current
 
 
 def _optional_str(raw: object, current: str | None) -> str | None:

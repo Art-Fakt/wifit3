@@ -6,9 +6,11 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, Input, Label
 
 from wifit3.persist.config import Config, ConfigError
-from wifit3.ui.path_picker import PathInput
+from wifit3.ui.path_picker import BROWSE_GLYPH, PathInput, PathPickerModal
 import shutil
 import sys
+from pathlib import Path
+from typing import Optional
 
 _SELF_TEST_DISABLE = "--self-test-disable"
 
@@ -30,6 +32,10 @@ class HashcatConfigModal(ModalScreen[dict]):
     """Configuration modal for Hashcat jobs."""
 
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._wordlists: list[str] = list(Config.wordlist_paths)
 
     DEFAULT_CSS = """
     HashcatConfigModal {
@@ -67,10 +73,10 @@ class HashcatConfigModal(ModalScreen[dict]):
             yield PathInput(_default_hashcat_path(), title="Select hashcat executable",
                             id="hashcat-exe")
             
-            yield Label("Wordlist Path:", classes="hashcat-label")
-            yield PathInput(Config.wordlist_path or "", title="Select wordlist",
-                            placeholder="e.g. D:\\wordlists\\Top29Million.txt",
-                            id="hashcat-wordlist")
+            yield Label("Wordlists:", classes="hashcat-label")
+            yield Label(self._wordlists_markup(), id="hashcat-wordlists")
+            yield Button(f"{BROWSE_GLYPH} Choose wordlists", "default", id="hashcat-choose",
+                         compact=True)
             
             args = Config.hashcat_args or ""
             yield Label("Hashcat Args:", classes="hashcat-label")
@@ -82,6 +88,29 @@ class HashcatConfigModal(ModalScreen[dict]):
             with Horizontal(id="hashcat-buttons"):
                 yield Button("Cancel", variant="error", id="hashcat-cancel")
                 yield Button("Launch", variant="success", id="hashcat-launch")
+
+    def _wordlists_markup(self) -> str:
+        """The chosen wordlists, in the order hashcat will be run against them."""
+        if not self._wordlists:
+            return "[dim]none chosen[/dim]"
+        names = ", ".join(Path(path).name for path in self._wordlists)
+        return f"[bold]{len(self._wordlists)}:[/bold] {names}"
+
+    @on(Button.Pressed, "#hashcat-choose")
+    def _choose_wordlists(self, event: Button.Pressed) -> None:
+        event.stop()
+        start = self._wordlists[0] if self._wordlists else str(Path.home())
+        self.app.push_screen(
+            PathPickerModal(start, title="Select wordlists", multiple=True,
+                            ticked=[Path(path) for path in self._wordlists]),
+            self._wordlists_chosen,
+        )
+
+    def _wordlists_chosen(self, paths: Optional[list[Path]]) -> None:
+        if paths is None:
+            return
+        self._wordlists = [str(path) for path in paths]
+        self.query_one("#hashcat-wordlists", Label).update(self._wordlists_markup())
 
     @on(Checkbox.Changed, "#hashcat-self-test-disable")
     def _toggle_self_test_disable(self, event: Checkbox.Changed) -> None:
@@ -100,22 +129,22 @@ class HashcatConfigModal(ModalScreen[dict]):
             self.action_cancel()
         elif event.button.id == "hashcat-launch":
             exe = self.query_one("#hashcat-exe", Input).value.strip()
-            wordlist = self.query_one("#hashcat-wordlist", Input).value.strip()
-            if not exe or not wordlist:
-                self.notify("Please provide both executable and wordlist paths", severity="error")
+            if not exe or not self._wordlists:
+                self.notify("Please provide the executable and at least one wordlist",
+                            severity="error")
                 return
             args = self.query_one("#hashcat-args", Input).value.strip()
-            self._remember(exe, wordlist, args)
+            self._remember(exe, self._wordlists, args)
             self.dismiss({
                 "hashcat_exe": exe,
-                "wordlists": [wordlist],
+                "wordlists": list(self._wordlists),
                 "hashcat_args": args
             })
 
-    def _remember(self, exe: str, wordlist: str, args: str) -> None:
+    def _remember(self, exe: str, wordlists: list[str], args: str) -> None:
         """Persist the launch settings so the next job starts pre-filled."""
         Config.hashcat_path = exe
-        Config.wordlist_path = wordlist
+        Config.wordlist_paths = list(wordlists)
         Config.hashcat_args = args
         try:
             Config.save()

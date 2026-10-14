@@ -14,7 +14,7 @@ from textual.widgets import Button, Input, Tree
 from wifit3.persist.config import Config
 from wifit3.persist.vault import Vault
 from wifit3.ui.path_picker import (
-    PathInput, PathPickerModal, _DirectoriesOnlyTree, _nearest_dir, picker_roots,
+    TICK_GLYPH, PathInput, PathPickerModal, _DirectoriesOnlyTree, _nearest_dir, picker_roots,
     relative_to_cwd,
 )
 from wifit3.ui.pref import PreferencesModal
@@ -202,3 +202,97 @@ async def test_preferences_stores_a_relative_capture_dir(monkeypatch):
         await pilot.pause()
 
         assert prefs.query_one("#captures_dir", Input).value == "captures"
+
+
+@pytest.mark.asyncio
+async def test_multi_select_journey(tree_fixture):
+    """Ticking several files: the marks are visible, the count shows on the button, and
+    Select hands back every tick in the order it was made."""
+    (tree_fixture / "wordlists" / "top29m.txt").write_text("hunter2\n", encoding="utf-8")
+    app = _Host()
+    async with app.run_test() as pilot:
+        picked = []
+        app.push_screen(PathPickerModal(tree_fixture / "wordlists", title="Select wordlists",
+                                        multiple=True), picked.append)
+        await pilot.pause()
+        picker = app.screen
+        tree = picker.query_one("#picker-tree")
+        select = picker.query_one("#picker-select", Button)
+        assert str(select.label) == "Select"
+        assert tree.has_focus, "space ticks, so the tree owns the keyboard from the start"
+
+        by_name = {n.data.path.name: n for n in tree.root.children}
+        tree.cursor_line = by_name["top29m.txt"].line
+        await pilot.press("space")                          # the real key, not the action
+        await pilot.pause()
+        assert str(select.label) == "Select (1)"
+
+        tree.cursor_line = by_name["rockyou.txt"].line
+        picker.action_toggle_tick()
+        await pilot.pause()
+        assert str(select.label) == "Select (2)"
+        assert TICK_GLYPH in str(tree.render_label(by_name["rockyou.txt"], None, None))
+
+        tree.cursor_line = by_name["top29m.txt"].line       # a second press unticks
+        picker.action_toggle_tick()
+        await pilot.pause()
+        assert str(select.label) == "Select (1)"
+
+        tree.cursor_line = by_name["top29m.txt"].line
+        picker.action_toggle_tick()
+        select.press()
+        await pilot.pause()
+
+    assert picked == [[tree_fixture / "wordlists" / "rockyou.txt",
+                       tree_fixture / "wordlists" / "top29m.txt"]]
+
+
+@pytest.mark.asyncio
+async def test_multi_select_starts_from_what_is_already_chosen(tree_fixture):
+    wordlist = tree_fixture / "wordlists" / "rockyou.txt"
+    app = _Host()
+    async with app.run_test() as pilot:
+        picked = []
+        app.push_screen(PathPickerModal(wordlist, multiple=True, ticked=[wordlist]), picked.append)
+        await pilot.pause()
+        picker = app.screen
+        assert str(picker.query_one("#picker-select", Button).label) == "Select (1)"
+
+        picker.query_one("#picker-select", Button).press()
+        await pilot.pause()
+
+    assert picked == [[wordlist]]
+
+
+@pytest.mark.asyncio
+async def test_a_single_file_picker_still_hands_back_one_path(tree_fixture):
+    """The single-select contract the rest of the app uses: one path, not a list of ticks."""
+    wordlist = tree_fixture / "wordlists" / "rockyou.txt"
+    app = _Host()
+    async with app.run_test() as pilot:
+        picked = []
+        app.push_screen(PathPickerModal(wordlist), picked.append)
+        await pilot.pause()
+        app.screen.query_one("#picker-path", Input).value = str(wordlist)
+        app.screen.query_one("#picker-select", Button).press()
+        await pilot.pause()
+
+    assert picked == [[wordlist]]
+
+
+@pytest.mark.asyncio
+async def test_space_on_a_directory_still_expands_it(tree_fixture):
+    app = _Host()
+    async with app.run_test() as pilot:
+        app.push_screen(PathPickerModal(tree_fixture, multiple=True))
+        await pilot.pause()
+        tree = app.screen.query_one("#picker-tree")
+        folder = next(n for n in tree.root.children if n.data.path.name == "wordlists")
+        tree.cursor_line = folder.line
+        assert not folder.is_expanded
+
+        await pilot.press("space")
+        await pilot.pause()
+
+        assert folder.is_expanded
+        assert str(app.screen.query_one("#picker-select", Button).label) == "Select"

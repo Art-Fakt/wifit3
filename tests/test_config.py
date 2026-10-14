@@ -9,7 +9,7 @@ _DEFAULTS = {n: getattr(Config, n)
              for n in (
                  "theme", "scanner_sort", "scanner_sort_reverse", "scanner_sort_delay",
                  "silenced_bssids", "hide_silenced", "log_level", "captures_dir", "save_pcap",
-                 "hashcat_path", "wordlist_path", "hashcat_args", "decloaked_ssids",
+                 "hashcat_path", "wordlist_paths", "hashcat_args", "decloaked_ssids",
                  "wps_auto_pbc")}
 
 
@@ -173,7 +173,7 @@ def test_scanner_sort_delay_save_load_roundtrip(config_path):
 
 
 def test_tool_paths_default_to_unset(config_path):
-    assert Config.hashcat_path is None and Config.wordlist_path is None
+    assert Config.hashcat_path is None and Config.wordlist_paths == []
 
 
 def test_unset_tool_paths_are_omitted_from_the_file(config_path):
@@ -187,14 +187,31 @@ def test_unset_tool_paths_are_omitted_from_the_file(config_path):
 
 def test_tool_paths_round_trip_when_set(config_path):
     Config.hashcat_path = r"D:\tools\hashcat\hashcat.exe"
-    Config.wordlist_path = r"D:\wordlists\Top29Million.txt"
+    Config.wordlist_paths = [r"D:\wordlists\Top29Million.txt", r"D:\wordlists\rockyou.txt"]
     Config.hashcat_args = "-a 0 -w 3"
     Config.save()
-    Config.hashcat_path = Config.wordlist_path = Config.hashcat_args = None
+    Config.hashcat_path = Config.hashcat_args = None
+    Config.wordlist_paths = []
     Config.load()
     assert Config.hashcat_path == r"D:\tools\hashcat\hashcat.exe"
-    assert Config.wordlist_path == r"D:\wordlists\Top29Million.txt"
+    assert Config.wordlist_paths == [r"D:\wordlists\Top29Million.txt",
+                                     r"D:\wordlists\rockyou.txt"]
     assert Config.hashcat_args == "-a 0 -w 3"
+
+
+def test_a_single_wordlist_path_from_an_older_config_still_loads(config_path):
+    config_path.write_text(r"wordlist_path = 'D:\wordlists\rockyou.txt'" + "\n")
+    Config.load()
+    assert Config.wordlist_paths == [r"D:\wordlists\rockyou.txt"]
+
+
+def test_the_older_wordlist_key_is_not_written_back(config_path):
+    config_path.write_text("wordlist_path = '/dicts/rockyou.txt'\n")
+    Config.load()
+    Config.save()
+    text = config_path.read_text()
+    assert "wordlist_paths = " in text
+    assert "wordlist_path = " not in text
 
 
 def test_empty_tool_path_loads_as_unset(config_path):
