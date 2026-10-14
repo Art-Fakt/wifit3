@@ -434,7 +434,7 @@ class ScannerView(Screen):
         log_widget = self.query_one("#system-log")
         log_widget.display = not log_widget.display
 
-    def _selected_ap(self) -> Optional[AccessPoint]:
+    def selected_ap(self) -> Optional[AccessPoint]:
         bssid = self.query_one("#ap-table", APTable).cursor_bssid
         return self.ap_cache.get(bssid) if bssid else None
 
