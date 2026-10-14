@@ -1,4 +1,6 @@
 import json
+import pathlib
+import sys
 import pytest
 from unittest.mock import MagicMock, patch
 from wifit3.vault.manager import JobManager
@@ -331,3 +333,59 @@ def test_a_finished_job_loaded_from_disk_can_still_be_cleared(tmp_path, mocker):
     manager = JobManager(MagicMock())
 
     assert manager.jobs["j1"].actions == JobAction.CLEAR
+
+
+def _fake_hashcat(tmp_path):
+    """A stand-in executable that prints one exhausted status line and exits."""
+    status = '{"status": 5, "progress": [3, 3]}'
+    if sys.platform == "win32":
+        exe = tmp_path / "fake-hashcat.cmd"
+        exe.write_text(f"@echo {status}\r\n@exit /b 1\r\n", encoding="utf-8")
+        return exe
+    exe = tmp_path / "fake-hashcat.sh"
+    exe.write_text(f"#!/bin/sh\necho '{status}'\nexit 1\n", encoding="utf-8")
+    exe.chmod(0o755)
+    return exe
+
+
+def test_a_queue_of_two_wordlists_runs_both_then_reports_not_found(manager, tmp_path):
+    """The whole loop against real processes: launch, exhaust, advance, exhaust, NOT FOUND."""
+    from wifit3.models.access_point import CaptureType
+    from wifit3.vault.tools.hashcat import HashcatTool
+
+    capture = tmp_path / "ap.hc22000"
+    capture.write_text("WPA*01*deadbeef\n")
+    first, second = tmp_path / "a.txt", tmp_path / "b.txt"
+    first.write_text("one\n")
+    second.write_text("two\n")
+    cap = PersistedCapture(type=CaptureType.HS, timestamp=0, path=str(capture),
+                           bssid="00:11:22:33:44:55")
+    manager.vault.all_captures.return_value = [cap]
+    tool = HashcatTool()
+    manager.register_tool(tool)
+    job_id = manager.submit_job("hashcat", cap, {
+        "hashcat_exe": str(_fake_hashcat(tmp_path)),
+        "wordlists": [str(first), str(second)],
+    })
+    job = manager.jobs[job_id]
+
+    manager.poll_jobs()                                 # launches against a.txt
+    assert job.status == ToolStatus.RUNNING
+    assert job.tool_state["index"] == 0
+    first_pid = job.pid
+
+    tool._procs[job.pid].wait()
+    manager.poll_jobs()                                 # a.txt exhausted -> b.txt
+    assert job.status == ToolStatus.RUNNING
+    assert job.tool_state["index"] == 1
+    assert job.pid != first_pid
+    assert job.actions == JobAction.STOP                # nothing left to skip to
+
+    tool._procs[job.pid].wait()
+    manager.poll_jobs()                                 # b.txt exhausted -> done
+
+    assert job.status == ToolStatus.FAILURE
+    assert job.progress_msg == "2 wordlists"
+    assert job.actions == JobAction.CLEAR
+    log = pathlib.Path(job.log_path).read_text(encoding="utf-8", errors="replace")
+    assert log.count("=== wordlist:") == 2, "both runs logged to the job's one log"
