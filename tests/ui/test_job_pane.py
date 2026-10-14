@@ -9,7 +9,7 @@ def _job(status=ToolStatus.RUNNING, wordlists=None):
         capture_path="test.hc22000",
         status=status,
         progress_msg="Running...",
-        config={"resolved_wordlists": wordlists or []},
+        tool_state={"wordlists": wordlists or []},
     )
 
 

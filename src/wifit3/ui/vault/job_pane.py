@@ -41,7 +41,7 @@ class JobActionButton(Button):
 
     def sync(self, job: JobState) -> None:
         """Match the button's label + colour to the job's current state."""
-        config = job.config or {}
+        config = job.config
         self.is_active = job.status in (ToolStatus.RUNNING, ToolStatus.QUEUED)
         self.is_force = False
         self.disabled = False
@@ -67,8 +67,8 @@ class JobSkipButton(Button):
         self.sync(job)
 
     def sync(self, job: JobState) -> None:
-        config = job.config or {}
-        wordlists = config.get("resolved_wordlists") or []
+        config = job.config
+        wordlists = job.tool_state.get("wordlists") or []
         self.display = (
             job.status == ToolStatus.RUNNING
             and _has_runtime_status(job)
@@ -114,7 +114,7 @@ class JobRow(Horizontal):
     def _status_markup(self, job: JobState) -> str:
         style = _STATUS_STYLE.get(job.status, "black bold on white")
         if job.status == ToolStatus.RUNNING:
-            if (job.config or {}).get("quit_requested"):
+            if job.config.get("quit_requested"):
                 label = "QUITTING"
             elif not _has_runtime_status(job):
                 label = "STARTING"

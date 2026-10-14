@@ -6,9 +6,10 @@ import shlex
 import subprocess
 import json
 from pathlib import Path, PureWindowsPath
-from typing import Dict, Any, Optional
+from typing import Dict, Optional
 
 from wifit3.models import PersistedCapture, ToolCapability, ToolResult, ToolStatus
+from wifit3.models.jobs import JobState
 from wifit3.vault.tools.base import VaultTool
 
 
@@ -69,7 +70,8 @@ class HashcatTool(VaultTool):
     def can_crack(self, capture: PersistedCapture) -> bool:
         return capture.path.endswith(".hc22000")
 
-    def launch(self, capture: PersistedCapture, config: Dict[str, Any]) -> Dict[str, Any]:
+    def launch(self, job: JobState, capture: PersistedCapture) -> None:
+        config = job.config
         hashcat_exe = config.get("hashcat_exe")
         wordlist = config.get("wordlist")
         if not hashcat_exe or not wordlist:
@@ -129,31 +131,25 @@ class HashcatTool(VaultTool):
             )
         self._procs[proc.pid] = proc
 
-        return {
-            "pid": proc.pid,
-            "log_path": log_path,
-            "potfile": potfile,
-            "hashcat_exe": hashcat_exe,
-            "hashcat_dir": hashcat_dir,
-            "capture_path": abs_capture,
-            "wordlists": abs_wordlists,
-        }
+        job.pid = proc.pid
+        job.log_path = log_path
+        job.tool_state["wordlists"] = abs_wordlists
 
-    def poll_status(self, tracking_data: Dict[str, Any], assume_dead: bool = False) -> ToolResult:
-        log_path = tracking_data.get("log_path")
+    def poll_status(self, job: JobState, assume_dead: bool = False) -> ToolResult:
+        log_path = job.log_path
         progress_msg = "Running..."
         if log_path and os.path.exists(log_path):
             progress_msg = self.parse_progress(log_path) or progress_msg
 
-        pid = tracking_data.get("pid")
-        config = tracking_data.get("config") or {}
+        pid = job.pid
+        config = job.config
         if config.get("force_killed"):
             if not assume_dead and self._is_running(pid, config.get("hashcat_exe")):
                 return ToolResult(status=ToolStatus.RUNNING, value=progress_msg)
             self._terminate(pid)
             return ToolResult(status=ToolStatus.KILLED, value="Force-killed by user")
 
-        capture_path = tracking_data.get("capture_path")
+        capture_path = job.capture_path
         potfile = str(Path(capture_path).resolve().with_suffix('.potfile')) if capture_path else None
 
         # The potfile is the source of truth for a recovered key. Check it FIRST, regardless of
@@ -169,11 +165,11 @@ class HashcatTool(VaultTool):
             return ToolResult(status=ToolStatus.RUNNING, value=progress_msg)
 
         self._terminate(pid)
-        if config.get("quit_requested") and self._has_stopped(log_path):
-            return ToolResult(status=ToolStatus.QUIT, value="Quit by user")
         if "Exhausted" in progress_msg:
             wordlist = config.get("wordlist")
             return ToolResult(status=ToolStatus.FAILURE, value=Path(wordlist).name if wordlist else "wordlist")
+        if config.get("quit_requested") and self._has_stopped(log_path):
+            return ToolResult(status=ToolStatus.QUIT, value="Quit by user")
         reason = self._last_log_message(log_path)
         return ToolResult(status=ToolStatus.ERROR, value=reason or "hashcat exited without recovering the key")
 
@@ -353,8 +349,8 @@ class HashcatTool(VaultTool):
                     logger.warning(f"Could not parse hashcat status JSON: {line}", exc_info=True)
         return progress_msg
 
-    def skip_wordlist(self, tracking_data: Dict[str, Any]) -> bool:
-        proc = self._procs.get(tracking_data.get("pid"))
+    def skip_wordlist(self, job: JobState) -> bool:
+        proc = self._procs.get(job.pid)
         if proc is None or proc.poll() is not None or proc.stdin is None:
             return False
         try:
@@ -364,8 +360,8 @@ class HashcatTool(VaultTool):
         except (BrokenPipeError, OSError):
             return False
 
-    def request_quit(self, tracking_data: Dict[str, Any]) -> bool:
-        proc = self._procs.get(tracking_data.get("pid"))
+    def request_quit(self, job: JobState) -> bool:
+        proc = self._procs.get(job.pid)
         if proc is None or proc.poll() is not None or proc.stdin is None:
             return False
         try:
@@ -375,8 +371,8 @@ class HashcatTool(VaultTool):
         except (BrokenPipeError, OSError):
             return False
 
-    def kill(self, tracking_data: Dict[str, Any]) -> None:
-        pid = tracking_data.get("pid")
+    def kill(self, job: JobState) -> None:
+        pid = job.pid
         if not pid:
             return
         proc = self._procs.pop(pid, None)
@@ -390,7 +386,7 @@ class HashcatTool(VaultTool):
             return
         # A job adopted from a previous session (no handle we own). Only signal it if still alive
         # and still hashcat, so a reused PID is left alone. SIGTERM -> TerminateProcess on Windows.
-        exe = (tracking_data.get("config") or {}).get("hashcat_exe")
+        exe = job.config.get("hashcat_exe")
         if not self._is_running(pid, exe):
             return
         try:

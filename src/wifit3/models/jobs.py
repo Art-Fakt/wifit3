@@ -1,12 +1,10 @@
 from enum import Enum, IntFlag, auto
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import asdict, dataclass, field, fields
+from typing import Any, Optional
 
 class ToolCapability(IntFlag):
     NONE = 0
     KILLABLE = auto()
-    PAUSABLE = auto()
-    RESUMABLE = auto()
     SINGLETON = auto()      # only one instance of this tool may run at a time
     ADOPTABLE = auto()      # process outlives the app; adopt it on relaunch, don't kill on exit
 
@@ -32,7 +30,24 @@ class JobState:
     pid: Optional[int] = None
     log_path: Optional[str] = None
     api_id: Optional[str] = None
-    config: Optional[dict] = None
+    config: dict[str, Any] = field(default_factory=dict)        # launch request from the tool's modal
+    tool_state: dict[str, Any] = field(default_factory=dict)    # tool-owned; no caller reads inside it
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["status"] = self.status.value
+        return data
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "JobState":
+        """Build a job from its persisted form, ignoring keys this version no longer has."""
+        known = {f.name for f in fields(cls)}
+        kwargs = {k: v for k, v in data.items() if k in known}
+        kwargs["status"] = ToolStatus(data["status"])
+        for name in ("config", "tool_state"):
+            if kwargs.get(name) is None:
+                kwargs[name] = {}
+        return cls(**kwargs)
 
 @dataclass
 class ToolResult:
