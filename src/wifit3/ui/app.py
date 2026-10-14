@@ -132,7 +132,7 @@ class WifiteApp(App):
         self.target_ap: Optional[AccessPoint] = None
         self.vault = Vault()
         self._job_status: dict[str, ToolStatus] = {}
-        self.pbc_enabled: bool = True
+        self.pbc_enabled: bool = Config.wps_auto_pbc
         register_app_themes(self)
         self.theme = Config.theme
 

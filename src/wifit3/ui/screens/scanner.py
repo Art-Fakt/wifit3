@@ -443,6 +443,8 @@ class ScannerView(Screen):
     def action_wps_pbc_mode(self) -> None:
         """Toggle WPS PBC auto-invade on/off (ON by default)."""
         self.app.pbc_enabled = not self.app.pbc_enabled
+        Config.wps_auto_pbc = self.app.pbc_enabled
+        self.app.persist_config()
         self._log_pbc_status()
         if self.app.pbc_enabled:
             self._arm_open_windows()
