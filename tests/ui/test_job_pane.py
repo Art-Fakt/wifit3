@@ -1,6 +1,10 @@
+from textual.app import App, ComposeResult
+from textual.reactive import reactive
+from textual.widgets import Label
+
 from wifit3.models.jobs import JobAction, JobState, ToolStatus
 from wifit3.ui.vault.job_pane import (
-    JobActionButton, JobPauseButton, JobRow, JobSkipButton,
+    JobActionButton, JobPauseButton, JobRow, JobSkipButton, JobTrackerPane,
 )
 
 
@@ -77,6 +81,27 @@ def test_pause_button_offers_resume_to_a_paused_job_and_nothing_to_an_unreachabl
 
     button.sync(_job(actions=JobAction.STOP))
     assert button.display is False
+
+
+class JobPaneApp(App):
+    """Just the tracker pane, for the measurements its CSS is responsible for."""
+
+    active_jobs: reactive[list[JobState]] = reactive([], always_update=True)
+
+    def compose(self) -> ComposeResult:
+        yield JobTrackerPane()
+
+
+async def test_the_bar_fills_its_box_and_leaves_room_for_the_percentage():
+    app = JobPaneApp()
+    async with app.run_test(size=(120, 24)) as pilot:
+        app.active_jobs = [_job(actions=JobAction.STOP,
+                                progress_msg="Running (30.00%) \u00b7 rockyou.txt")]
+        await pilot.pause()
+
+        assert app.query_one("#bar").size.width == 13        # the 18-cell box, less the percentage
+        assert str(app.query_one("#percentage").render()) == "30%"
+        assert app.query_one(".job-name", Label).styles.text_align == "right"
 
 
 def test_action_button_stops_a_running_job_and_clears_a_finished_one():

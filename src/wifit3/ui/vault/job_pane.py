@@ -147,8 +147,9 @@ class JobTrackerPane(Widget):
     }
     JobTrackerPane #job-list { height: auto; }
     JobTrackerPane .job-row { height: 1; }
-    JobTrackerPane .job-name { width: 25; }
+    JobTrackerPane .job-name { width: 25; text-align: right; }
     JobTrackerPane .job-bar { width: 18; height: 1; margin: 0 1; }
+    JobTrackerPane .job-bar Bar { width: 1fr; }
     JobTrackerPane .job-bar Bar > .bar--bar { background: $panel; }
     JobTrackerPane .job-status { width: 11; margin-right: 1; }
     JobTrackerPane .job-detail { width: 1fr; min-width: 0; overflow-x: hidden; }
