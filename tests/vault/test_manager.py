@@ -1,6 +1,7 @@
 import json
 import pathlib
 import sys
+import time
 import pytest
 from unittest.mock import MagicMock, patch
 from wifit3.vault.manager import JobManager
@@ -335,6 +336,14 @@ def test_a_finished_job_loaded_from_disk_can_still_be_cleared(tmp_path, mocker):
     assert manager.jobs["j1"].actions == JobAction.CLEAR
 
 
+def _wait_for_exit(tool, pid, seconds=10.0):
+    """The fake hashcat prints one line and exits; on Windows hashcat_console is its parent,
+    so wifit3 has no Popen to wait on."""
+    deadline = time.monotonic() + seconds
+    while tool._is_running(pid) and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+
 def _fake_hashcat(tmp_path):
     """A stand-in executable that prints one exhausted status line and exits."""
     status = '{"status": 5, "progress": [3, 3]}'
@@ -374,14 +383,14 @@ def test_a_queue_of_two_wordlists_runs_both_then_reports_not_found(manager, tmp_
     assert job.tool_state["index"] == 0
     first_pid = job.pid
 
-    tool._procs[job.pid].wait()
+    _wait_for_exit(tool, job.pid)
     manager.poll_jobs()                                 # a.txt exhausted -> b.txt
     assert job.status == ToolStatus.RUNNING
     assert job.tool_state["index"] == 1
     assert job.pid != first_pid
-    assert job.actions == JobAction.STOP                # nothing left to skip to
+    assert job.actions == JobAction.STOP | JobAction.PAUSE   # nothing left to skip to
 
-    tool._procs[job.pid].wait()
+    _wait_for_exit(tool, job.pid)
     manager.poll_jobs()                                 # b.txt exhausted -> done
 
     assert job.status == ToolStatus.FAILURE

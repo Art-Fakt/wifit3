@@ -14,6 +14,8 @@ class JobAction(IntFlag):
     STOP = auto()
     SKIP = auto()
     CLEAR = auto()
+    PAUSE = auto()
+    RESUME = auto()
 
 class ToolStatus(str, Enum):
     QUEUED = "QUEUED"

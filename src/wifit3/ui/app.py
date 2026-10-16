@@ -224,6 +224,18 @@ class WifiteApp(App):
             self._poll_jobs()
         return skipped
 
+    def pause_job(self, job_id: str) -> bool:
+        paused = self.vault.manager.pause_job(job_id)
+        if paused:
+            self._poll_jobs()
+        return paused
+
+    def resume_job(self, job_id: str) -> bool:
+        resumed = self.vault.manager.resume_job(job_id)
+        if resumed:
+            self._poll_jobs()
+        return resumed
+
     def clear_job(self, job_id: str) -> None:
         """Remove a finished job, then refresh the tracker immediately."""
         self.vault.manager.clear_job(job_id)

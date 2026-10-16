@@ -1,6 +1,7 @@
 import logging
 import os
 import shlex
+import signal
 import subprocess
 import json
 import time
@@ -10,6 +11,7 @@ from typing import Dict, Optional
 
 from wifit3.models import PersistedCapture, ToolCapability, ToolResult, ToolStatus
 from wifit3.models.jobs import JobAction, JobState
+from wifit3.vault.tools import hashcat_keypress
 from wifit3.vault.tools.base import VaultTool
 
 
@@ -19,6 +21,8 @@ _STILL_ACTIVE = 259                             # GetExitCodeProcess: process ha
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 _LOG_TAIL_BYTES = 256 * 1024
 _EXIT_WAIT_SECONDS = 5.0
+_TERMINATE_WAIT_SECONDS = 0.5                   # no SIGTERM handler in hashcat: it exits at once
+_QUIT_GRACE_SECONDS = 10.0                      # how long 'q' has to work before we kill instead
 
 
 def _read_log_tail(path, limit: int = _LOG_TAIL_BYTES, start: int = 0) -> list[str]:
@@ -70,6 +74,9 @@ class WordlistQueue:
     index: int = 0
     log_offset: int = 0         # bytes already in the job's log when the current process started
     stopped: bool = False
+    skipping_wordlist: bool = False
+    stdin_path: str = ""            # hashcat's stdin; see hashcat_keypress.send
+    quit_sent_at: float = 0.0       # time.time() of the 'q' keypress
 
     @classmethod
     def from_job(cls, job: JobState) -> "WordlistQueue":
@@ -148,30 +155,21 @@ class HashcatTool(VaultTool):
             str(queue.current),
         ]
 
-        creationflags = 0
-        if os.name == 'nt':
-            creationflags = subprocess.CREATE_NO_WINDOW
-
         with open(job.log_path, 'ab') as f:
             f.write(f"\n=== wordlist: {queue.current} ===\n".encode("utf-8"))
             f.flush()
             queue.log_offset = f.tell()
-            logger.info(f"Launching {' '.join(cmd)}, saving output to {job.log_path}")
-            proc = subprocess.Popen(
-                cmd,
-                cwd=str(Path(hashcat_exe).parent),
-                stdin=subprocess.DEVNULL,
-                stdout=f,
-                stderr=subprocess.STDOUT,
-                creationflags=creationflags,
-                # setsid on POSIX so hashcat leaves wifit3's session and survives SIGHUP when the
-                # terminal closes; no effect on Windows.
-                start_new_session=True,
-            )
-        self._procs[proc.pid] = proc
-        job.pid = proc.pid
+        logger.info(f"Launching {' '.join(cmd)}, saving output to {job.log_path}")
+        proc, pid, stdin_path = hashcat_keypress.spawn(
+            cmd, cwd=str(Path(hashcat_exe).parent), log_path=job.log_path)
+
+        if proc is not None:
+            self._procs[pid] = proc
+        job.pid = pid
+        queue.stdin_path = stdin_path
+        queue.quit_sent_at = 0.0
         queue.write_to(job)
-        logger.info(f"hashcat running on pid {proc.pid} for {queue.label}")
+        logger.info(f"hashcat running on pid {pid} for {queue.label}")
 
     def _drop_dead_pidfile(self, hashcat_exe: str) -> None:
         """hashcat refuses to start while the pid in its session pidfile is alive, and a run we
@@ -193,26 +191,35 @@ class HashcatTool(VaultTool):
                     logger.info(f"Removed {pidfile}: hashcat pid {recorded} is gone")
 
     def poll_status(self, job: JobState, assume_dead: bool = False) -> ToolResult:
+        self._remove_exited_processes()
         queue = WordlistQueue.from_job(job)
         lines = _read_log_tail(job.log_path, start=queue.log_offset)
         progress_msg = self._parse_progress(lines) or "Running..."
 
         # The potfile is the source of truth for a recovered key. Check it FIRST, regardless of
         # liveness: hashcat sometimes hangs after printing its result, and blocking the poll until
-        # the process exits froze the whole UI. If the key is there, reap the process and succeed.
+        # the process exits froze the whole UI. If the key is there, end the process and succeed.
         key = self._key_from_potfile(self._potfile(job.capture_path))
         if key is not None:
             self._terminate(job.pid)
             return ToolResult(status=ToolStatus.SUCCESS, value=f"Cracked! Key: {key}", result_data={"key": key})
 
         if not assume_dead and self._is_running(job.pid, job.config.get("hashcat_exe")):
+            self._kill_if_quit_timed_out(job, queue)
             return ToolResult(status=ToolStatus.RUNNING,
                               value=self._running_msg(progress_msg, queue),
-                              actions=self._running_actions(queue))
+                              actions=self._running_actions(queue, progress_msg))
 
         self._terminate(job.pid)
         if queue.stopped:
             return ToolResult(status=ToolStatus.STOPPED, value="Stopped by user")
+        if queue.skipping_wordlist and queue.has_next:
+            queue.skipping_wordlist = False
+            queue.index += 1
+            self._start(job, queue)
+            return ToolResult(status=ToolStatus.RUNNING,
+                              value=self._running_msg("Starting...", queue),
+                              actions=self._running_actions(queue))
         if "Exhausted" in progress_msg and queue.has_next:
             queue.index += 1
             self._start(job, queue)
@@ -229,6 +236,10 @@ class HashcatTool(VaultTool):
         if action is JobAction.SKIP:
             if not queue.has_next:
                 return False
+            if self._send_quit_keypress(job, queue):
+                queue.skipping_wordlist = True
+                queue.write_to(job)
+                return True
             queue.index += 1
             self._kill(job)
             self._start(job, queue)
@@ -236,13 +247,39 @@ class HashcatTool(VaultTool):
         if action is JobAction.STOP:
             queue.stopped = True
             queue.write_to(job)
-            self._kill(job)
+            if not self._send_quit_keypress(job, queue):
+                self._kill(job)
             return True
+        if action in (JobAction.PAUSE, JobAction.RESUME):
+            key = "p" if action is JobAction.PAUSE else "r"
+            return hashcat_keypress.send(key, pid=job.pid, stdin_path=queue.stdin_path)
         return False
 
+    def _send_quit_keypress(self, job: JobState, queue: WordlistQueue) -> bool:
+        if not hashcat_keypress.send("q", pid=job.pid, stdin_path=queue.stdin_path):
+            return False
+        queue.quit_sent_at = time.time()
+        queue.write_to(job)
+        logger.info(f"Sent 'q' to hashcat pid {job.pid}")
+        return True
+
+    def _kill_if_quit_timed_out(self, job: JobState, queue: WordlistQueue) -> None:
+        if not queue.quit_sent_at or time.time() - queue.quit_sent_at < _QUIT_GRACE_SECONDS:
+            return
+        logger.warning(f"hashcat pid {job.pid} is still running {_QUIT_GRACE_SECONDS:.0f}s "
+                       f"after 'q'; killing it")
+        self._kill(job)
+        queue.quit_sent_at = 0.0
+        queue.write_to(job)
+
     @staticmethod
-    def _running_actions(queue: WordlistQueue) -> JobAction:
-        return (JobAction.STOP | JobAction.SKIP) if queue.has_next else JobAction.STOP
+    def _running_actions(queue: WordlistQueue, progress_msg: str = "") -> JobAction:
+        if queue.quit_sent_at:
+            return JobAction.STOP
+        actions = (JobAction.STOP | JobAction.SKIP) if queue.has_next else JobAction.STOP
+        if queue.stdin_path:
+            actions |= JobAction.RESUME if progress_msg.startswith("Paused") else JobAction.PAUSE
+        return actions
 
     @staticmethod
     def _running_msg(progress_msg: str, queue: WordlistQueue) -> str:
@@ -341,36 +378,46 @@ class HashcatTool(VaultTool):
         finally:
             k32.CloseHandle(handle)
 
+    def _remove_exited_processes(self) -> None:
+        # poll() also releases an exited child: unpolled it stays defunct until wifit3 exits
+        for pid, proc in list(self._procs.items()):
+            if proc.poll() is not None:
+                del self._procs[pid]
+
     def _terminate(self, pid) -> None:
-        """Drop this session's handle on ``pid``, terminating the process if it is still running."""
-        proc = self._procs.pop(pid, None)
-        if proc is not None and proc.poll() is None:
+        proc = self._procs.get(pid)
+        if proc is None:
+            return
+        if proc.poll() is None:
             try:
                 proc.terminate()
+                proc.wait(timeout=_TERMINATE_WAIT_SECONDS)
             except Exception:
-                logger.exception(f"Failed to terminate hashcat pid {pid}")
+                logger.warning(f"hashcat pid {pid} did not exit when terminated", exc_info=True)
+                return                  # still tracked, so a later poll removes it
+        del self._procs[pid]
 
     def _kill(self, job: JobState) -> None:
-        """Terminate the job's process and wait for it to go: hashcat refuses to start while
-        another instance of the same executable is alive."""
+        """Kill the job's process and wait for it to exit: hashcat refuses to start while
+        another instance of the same executable is running."""
         pid = job.pid
         if not pid:
             return
-        proc = self._procs.pop(pid, None)
+        proc = self._procs.get(pid)
         if proc is not None:
-            if proc.poll() is not None:
-                return
-            try:
-                proc.kill()
-                proc.wait(timeout=_EXIT_WAIT_SECONDS)
-                logger.info(f"Killed hashcat pid {pid}")
-            except Exception:
-                logger.exception(f"Failed to kill hashcat pid {pid}")
+            if proc.poll() is None:
+                try:
+                    proc.kill()
+                    proc.wait(timeout=_EXIT_WAIT_SECONDS)
+                    logger.info(f"Killed hashcat pid {pid}")
+                except Exception:
+                    logger.exception(f"Failed to kill hashcat pid {pid}")
+                    return                  # still tracked, so a later poll removes it
+            del self._procs[pid]
             return
         if not self._is_running(pid, job.config.get("hashcat_exe")):
             return
         try:
-            import signal
             os.kill(pid, signal.SIGTERM)
         except OSError:
             logger.warning(f"Could not terminate hashcat pid {pid}", exc_info=True)

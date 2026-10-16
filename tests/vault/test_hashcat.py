@@ -1,12 +1,14 @@
 import logging
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
 
 from wifit3.vault.tools.hashcat import (
-    WordlistQueue, HashcatTool, _read_log_tail, _split_args, expand_wordlists,
+    WordlistQueue, HashcatTool, _TERMINATE_WAIT_SECONDS, _read_log_tail, _split_args,
+    expand_wordlists,
 )
 from wifit3.models import PersistedCapture
 from wifit3.models.access_point import CaptureType
@@ -34,11 +36,21 @@ def _queued_job(tmp_path, wordlists, args=None):
     return _job(capture_path=str(tmp_path / "a.hc22000"), config=config)
 
 
-def _fake_popen(mocker, pid=4242, alive=True):
-    popen = mocker.patch("wifit3.vault.tools.hashcat.subprocess.Popen")
-    popen.return_value.pid = pid
-    popen.return_value.poll.return_value = None if alive else 1
-    return popen
+def _fake_spawn(mocker, pid=4242, alive=True, stdin_path=""):
+    """Stand in for hashcat_keypress.spawn: one fake process, and no stdin for keypresses
+    unless a test asks for it, so by default a job can only be ended by being killed."""
+    proc = mocker.Mock()
+    proc.pid = pid
+    proc.poll.return_value = None if alive else 1
+    spawn = mocker.patch("wifit3.vault.tools.hashcat_keypress.spawn",
+                         return_value=(proc, pid, stdin_path))
+    spawn.proc = proc
+    return spawn
+
+
+def _fake_keys(mocker, delivered=True):
+    """Stand in for hashcat_keypress.send; records every keypress sent to hashcat."""
+    return mocker.patch("wifit3.vault.tools.hashcat_keypress.send", return_value=delivered)
 
 
 def _live_tool(mocker, pid=4242) -> HashcatTool:
@@ -191,39 +203,41 @@ def test_launch_runs_hashcat_against_the_first_wordlist_only(tmp_path, mocker):
     first, second = tmp_path / "a.txt", tmp_path / "b.txt"
     first.write_text("one\n")
     second.write_text("two\n")
-    popen = _fake_popen(mocker)
+    spawn = _fake_spawn(mocker)
     job = _queued_job(tmp_path, [first, second])
 
     HashcatTool().launch(job, _cap(tmp_path))
 
-    command = popen.call_args.args[0]
+    command = spawn.call_args.args[0]
     assert command[-2:] == [str((tmp_path / "a.hc22000").resolve()), str(first.resolve())]
     assert job.pid == 4242
     assert job.tool_state["wordlists"] == [str(first.resolve()), str(second.resolve())]
     assert job.tool_state["index"] == 0
-    assert "shell" not in popen.call_args.kwargs
+    assert "shell" not in spawn.call_args.kwargs
 
 
-def test_launch_detaches_stdin_because_hashcats_keys_need_a_tty(tmp_path, mocker):
+def test_launch_records_where_to_send_keypresses_to_the_running_hashcat(tmp_path, mocker):
     wordlist = tmp_path / "a.txt"
     wordlist.write_text("one\n")
-    popen = _fake_popen(mocker)
+    spawn = _fake_spawn(mocker, stdin_path="/tmp/a.hashcat.log.keys")
+    job = _queued_job(tmp_path, [wordlist])
 
-    HashcatTool().launch(_queued_job(tmp_path, [wordlist]), _cap(tmp_path))
+    HashcatTool().launch(job, _cap(tmp_path))
 
-    assert popen.call_args.kwargs["stdin"] is subprocess.DEVNULL
+    assert spawn.call_args.kwargs["log_path"] == job.log_path
+    assert job.tool_state["stdin_path"] == "/tmp/a.hashcat.log.keys"
 
 
 def test_poll_status_advances_to_the_next_wordlist_when_one_is_exhausted(tmp_path, mocker):
     first, second = tmp_path / "a.txt", tmp_path / "b.txt"
     first.write_text("one\n")
     second.write_text("two\n")
-    popen = _fake_popen(mocker)
+    spawn = _fake_spawn(mocker)
     tool = HashcatTool()
     job = _queued_job(tmp_path, [first, second])
     tool.launch(job, _cap(tmp_path))
     _append(job.log_path, '{ "status": 5, "progress": [3, 3] }\n')
-    popen.return_value.poll.return_value = 1        # the first hashcat has exited
+    spawn.proc.poll.return_value = 1        # the first hashcat has exited
 
     res = tool.poll_status(job)
 
@@ -231,8 +245,8 @@ def test_poll_status_advances_to_the_next_wordlist_when_one_is_exhausted(tmp_pat
     assert res.value == "Starting... · b.txt (2/2)"
     assert res.actions == JobAction.STOP
     assert job.tool_state["index"] == 1
-    assert popen.call_count == 2
-    assert popen.call_args.args[0][-1] == str(second.resolve())
+    assert spawn.call_count == 2
+    assert spawn.call_args.args[0][-1] == str(second.resolve())
 
 
 def test_poll_status_does_not_re_read_the_previous_wordlists_exhausted_line(tmp_path, mocker):
@@ -240,36 +254,36 @@ def test_poll_status_does_not_re_read_the_previous_wordlists_exhausted_line(tmp_
     wordlists = [tmp_path / "a.txt", tmp_path / "b.txt", tmp_path / "c.txt"]
     for wordlist in wordlists:
         wordlist.write_text("one\n")
-    popen = _fake_popen(mocker)
+    spawn = _fake_spawn(mocker)
     tool = HashcatTool()
     job = _queued_job(tmp_path, wordlists)
     tool.launch(job, _cap(tmp_path))
     _append(job.log_path, '{ "status": 5, "progress": [3, 3] }\n')
-    popen.return_value.poll.return_value = 1
+    spawn.proc.poll.return_value = 1
     tool.poll_status(job)                           # advances to b.txt
-    popen.return_value.poll.return_value = None     # b.txt is running, has logged nothing yet
+    spawn.proc.poll.return_value = None     # b.txt is running, has logged nothing yet
 
     res = tool.poll_status(job)
 
     assert res.status == ToolStatus.RUNNING
     assert job.tool_state["index"] == 1
-    assert popen.call_count == 2
+    assert spawn.call_count == 2
 
 
 def test_apply_skip_abandons_the_running_wordlist_for_the_next(tmp_path, mocker):
     first, second = tmp_path / "a.txt", tmp_path / "b.txt"
     first.write_text("one\n")
     second.write_text("two\n")
-    popen = _fake_popen(mocker)
+    spawn = _fake_spawn(mocker)
     tool = HashcatTool()
     job = _queued_job(tmp_path, [first, second])
     tool.launch(job, _cap(tmp_path))
 
     assert tool.apply(JobAction.SKIP, job) is True
 
-    popen.return_value.kill.assert_called_once_with()
+    spawn.proc.kill.assert_called_once_with()
     assert job.tool_state["index"] == 1
-    assert popen.call_args.args[0][-1] == str(second.resolve())
+    assert spawn.call_args.args[0][-1] == str(second.resolve())
 
 
 def _pidfile_job(tmp_path, exe: Path, wordlist: Path) -> JobState:
@@ -287,7 +301,7 @@ def test_launch_removes_a_pidfile_left_behind_by_a_killed_run(tmp_path, mocker):
     dead.wait()
     pidfile = tmp_path / "hashcat.pid"
     pidfile.write_bytes(dead.pid.to_bytes(4, "little"))
-    _fake_popen(mocker)
+    _fake_spawn(mocker)
     job = _pidfile_job(tmp_path, tmp_path / "hashcat.exe", tmp_path / "a.txt")
 
     HashcatTool().launch(job, _cap(tmp_path))
@@ -302,7 +316,7 @@ def test_launch_keeps_the_pidfile_of_a_hashcat_that_is_really_running(tmp_path, 
     try:
         pidfile = tmp_path / "hashcat.pid"
         pidfile.write_bytes(running.pid.to_bytes(4, "little"))
-        _fake_popen(mocker)
+        _fake_spawn(mocker)
         # named for the live process above, so the pid's image matches the configured exe
         job = _pidfile_job(tmp_path, tmp_path / (Path(sys.executable).stem + ".exe"),
                            tmp_path / "a.txt")
@@ -321,13 +335,13 @@ def test_skip_starts_the_next_wordlist_only_once_the_old_process_is_gone(tmp_pat
     first, second = tmp_path / "a.txt", tmp_path / "b.txt"
     first.write_text("one\n")
     second.write_text("two\n")
-    popen = _fake_popen(mocker)
+    spawn = _fake_spawn(mocker)
     reaped_before_launch = []
 
-    def spawn(*args, **kwargs):
-        reaped_before_launch.append(popen.return_value.wait.called)
-        return popen.return_value
-    popen.side_effect = spawn
+    def record(*args, **kwargs):
+        reaped_before_launch.append(spawn.proc.wait.called)
+        return spawn.proc, spawn.proc.pid, ""
+    spawn.side_effect = record
     tool = HashcatTool()
     job = _queued_job(tmp_path, [first, second])
     tool.launch(job, _cap(tmp_path))
@@ -335,41 +349,176 @@ def test_skip_starts_the_next_wordlist_only_once_the_old_process_is_gone(tmp_pat
     assert tool.apply(JobAction.SKIP, job) is True
 
     assert reaped_before_launch == [False, True]
-    assert popen.call_args.args[0][-1] == str(second.resolve())
+    assert spawn.call_args.args[0][-1] == str(second.resolve())
 
 
 def test_apply_skip_is_refused_on_the_last_wordlist(tmp_path, mocker):
     wordlist = tmp_path / "a.txt"
     wordlist.write_text("one\n")
-    popen = _fake_popen(mocker)
+    spawn = _fake_spawn(mocker)
     tool = HashcatTool()
     job = _queued_job(tmp_path, [wordlist])
     tool.launch(job, _cap(tmp_path))
 
     assert tool.apply(JobAction.SKIP, job) is False
-    assert popen.call_count == 1
-    popen.return_value.kill.assert_not_called()
+    assert spawn.call_count == 1
+    spawn.proc.kill.assert_not_called()
 
 
 def test_apply_stop_kills_the_process_and_marks_the_job_stopped(tmp_path, mocker):
     wordlist = tmp_path / "a.txt"
     wordlist.write_text("one\n")
-    popen = _fake_popen(mocker)
+    spawn = _fake_spawn(mocker)
     tool = HashcatTool()
     job = _queued_job(tmp_path, [wordlist])
     tool.launch(job, _cap(tmp_path))
 
     assert tool.apply(JobAction.STOP, job) is True
 
-    popen.return_value.kill.assert_called_once_with()
+    spawn.proc.kill.assert_called_once_with()
     assert job.tool_state["stopped"] is True
     assert tool.poll_status(job, assume_dead=True).status == ToolStatus.STOPPED
+
+
+# ----- keys -----------------------------------------------------------------
+
+def _reachable_job(tmp_path, mocker, wordlists):
+    """A launched job whose hashcat accepts keypresses, plus the spawn and send stand-ins."""
+    spawn = _fake_spawn(mocker, stdin_path="/keys")
+    keys = _fake_keys(mocker)
+    tool = HashcatTool()
+    job = _queued_job(tmp_path, wordlists)
+    tool.launch(job, _cap(tmp_path))
+    return tool, job, spawn, keys
+
+
+def test_stop_asks_hashcat_to_quit_instead_of_killing_it(tmp_path, mocker):
+    """A clean exit flushes hashcat's files and removes the pidfile that would block the
+    next run."""
+    wordlist = tmp_path / "a.txt"
+    wordlist.write_text("one\n")
+    tool, job, spawn, keys = _reachable_job(tmp_path, mocker, [wordlist])
+
+    assert tool.apply(JobAction.STOP, job) is True
+
+    assert keys.call_args.args[0] == "q"
+    assert keys.call_args.kwargs == {"pid": 4242, "stdin_path": "/keys"}
+    spawn.proc.kill.assert_not_called()
+    assert job.tool_state["stopped"] is True
+
+
+def test_stop_kills_hashcat_when_it_takes_no_keypresses(tmp_path, mocker):
+    wordlist = tmp_path / "a.txt"
+    wordlist.write_text("one\n")
+    spawn = _fake_spawn(mocker)
+    tool = HashcatTool()
+    job = _queued_job(tmp_path, [wordlist])
+    tool.launch(job, _cap(tmp_path))
+
+    assert tool.apply(JobAction.STOP, job) is True
+
+    spawn.proc.kill.assert_called_once_with()
+
+
+def test_skip_waits_for_the_quit_before_starting_the_next_wordlist(tmp_path, mocker):
+    first, second = tmp_path / "a.txt", tmp_path / "b.txt"
+    first.write_text("one\n")
+    second.write_text("two\n")
+    tool, job, spawn, keys = _reachable_job(tmp_path, mocker, [first, second])
+
+    assert tool.apply(JobAction.SKIP, job) is True
+
+    assert keys.call_args.args[0] == "q"
+    assert spawn.call_count == 1                        # the next one has not been launched
+    assert job.tool_state["index"] == 0
+    spawn.proc.kill.assert_not_called()
+
+    spawn.proc.poll.return_value = 1                    # the quit took effect
+    res = tool.poll_status(job)
+
+    assert res.status == ToolStatus.RUNNING
+    assert job.tool_state["index"] == 1
+    assert spawn.call_args.args[0][-1] == str(second.resolve())
+
+
+def test_pause_and_resume_send_a_keypress_to_hashcat(tmp_path, mocker):
+    wordlist = tmp_path / "a.txt"
+    wordlist.write_text("one\n")
+    tool, job, _spawn, keys = _reachable_job(tmp_path, mocker, [wordlist])
+
+    assert tool.apply(JobAction.PAUSE, job) is True
+    assert keys.call_args.args[0] == "p"
+
+    assert tool.apply(JobAction.RESUME, job) is True
+    assert keys.call_args.args[0] == "r"
+
+
+def test_pause_is_refused_when_hashcat_takes_no_keypresses(tmp_path, mocker):
+    wordlist = tmp_path / "a.txt"
+    wordlist.write_text("one\n")
+    _fake_spawn(mocker)
+    tool = HashcatTool()
+    job = _queued_job(tmp_path, [wordlist])
+    tool.launch(job, _cap(tmp_path))
+
+    assert tool.apply(JobAction.PAUSE, job) is False
+
+
+def test_a_running_job_offers_pause_and_a_paused_one_offers_resume(tmp_path, mocker):
+    wordlist = tmp_path / "a.txt"
+    wordlist.write_text("one\n")
+    tool, job, _spawn, _keys = _reachable_job(tmp_path, mocker, [wordlist])
+
+    _append(job.log_path, '{ "status": 3, "progress": [1, 4] }\n')
+    assert tool.poll_status(job).actions == JobAction.STOP | JobAction.PAUSE
+
+    _append(job.log_path, '{ "status": 4, "progress": [1, 4] }\n')
+    assert tool.poll_status(job).actions == JobAction.STOP | JobAction.RESUME
+
+
+def test_a_job_that_takes_no_keypresses_offers_neither(tmp_path, mocker):
+    wordlist = tmp_path / "a.txt"
+    wordlist.write_text("one\n")
+    _fake_spawn(mocker)
+    tool = HashcatTool()
+    job = _queued_job(tmp_path, [wordlist])
+    tool.launch(job, _cap(tmp_path))
+
+    assert tool.poll_status(job).actions == JobAction.STOP
+
+
+def test_a_job_on_its_way_out_offers_nothing_but_stop(tmp_path, mocker):
+    first, second = tmp_path / "a.txt", tmp_path / "b.txt"
+    first.write_text("one\n")
+    second.write_text("two\n")
+    tool, job, _spawn, _keys = _reachable_job(tmp_path, mocker, [first, second])
+
+    tool.apply(JobAction.SKIP, job)
+
+    assert tool.poll_status(job).actions == JobAction.STOP
+
+
+def test_an_ignored_quit_key_escalates_to_a_kill(tmp_path, mocker):
+    """hashcat reads no keys until start-up finishes. An early 'q' reaches nothing, and Stop
+    must still end the job."""
+    wordlist = tmp_path / "a.txt"
+    wordlist.write_text("one\n")
+    tool, job, spawn, _keys = _reachable_job(tmp_path, mocker, [wordlist])
+    tool.apply(JobAction.STOP, job)
+
+    tool.poll_status(job)
+    spawn.proc.kill.assert_not_called()
+
+    job.tool_state["quit_sent_at"] = time.time() - 11
+    tool.poll_status(job)
+
+    spawn.proc.kill.assert_called_once_with()
 
 
 def test_launch_clears_a_potfile_from_an_earlier_job(tmp_path, mocker):
     wordlist = tmp_path / "a.txt"
     wordlist.write_text("one\n")
-    _fake_popen(mocker)
+    _fake_spawn(mocker)
     job = _queued_job(tmp_path, [wordlist])
     potfile = tmp_path / "a.potfile"
     potfile.write_text("hash:stale-key\n")
@@ -382,7 +531,7 @@ def test_launch_clears_a_potfile_from_an_earlier_job(tmp_path, mocker):
 def test_launch_truncates_the_log_so_one_job_owns_one_log(tmp_path, mocker):
     wordlist = tmp_path / "a.txt"
     wordlist.write_text("one\n")
-    _fake_popen(mocker)
+    _fake_spawn(mocker)
     job = _queued_job(tmp_path, [wordlist])
     log = tmp_path / "a.hashcat.log"
     log.write_text("output from a previous job\n")
@@ -434,16 +583,16 @@ def test_launch_wordlist_must_exist(tmp_path):
             _cap(tmp_path))
 
 
-def test_launch_puts_user_args_before_the_capture_and_wordlist(tmp_path, caplog):
+def test_launch_puts_user_args_before_the_capture_and_wordlist(tmp_path, mocker, caplog):
     """hashcat's usage is [options] hashfile dictionary, so a user option must land ahead of
     both positionals."""
     wordlist = tmp_path / "rockyou.txt"
     wordlist.write_text("hunter2\n")
+    _fake_spawn(mocker)
     tool = HashcatTool()
     job = _queued_job(tmp_path, [wordlist], args="-w 3")
     with caplog.at_level(logging.INFO):
         tool.launch(job, _cap(tmp_path))
-    tool._terminate(job.pid)
     launched = next(r.message for r in caplog.records if r.message.startswith("Launching "))
     assert launched.index("-w 3") < launched.index("a.hc22000")
 
@@ -505,6 +654,14 @@ def test_kill_force_terminates_owned_hashcat(mocker):
     assert 123 not in tool._procs
 
 
+def _exhausted_job(tmp_path) -> JobState:
+    """A job whose log says hashcat ran out of candidates."""
+    log = tmp_path / "j.log"
+    log.write_text('{ "session": "hashcat", "status": 5, "progress": [3, 3] }\n')
+    return _job(log_path=str(log), pid=777, capture_path=str(tmp_path / "x.hc22000"),
+                tool_state={"wordlists": ["rockyou.txt"]})
+
+
 def test_poll_status_reaps_procs_on_exhausted(tmp_path):
     """A finished-but-not-cracked job drops its process-tracking entry (no leak)."""
     tool = HashcatTool()
@@ -518,6 +675,37 @@ def test_poll_status_reaps_procs_on_exhausted(tmp_path):
                                 tool_state={"wordlists": ["rockyou.txt"]}))
     assert res.status == ToolStatus.FAILURE
     assert proc.pid not in tool._procs
+
+
+def test_a_finished_hashcat_is_waited_on_instead_of_left_as_a_zombie(tmp_path, mocker):
+    proc = mocker.Mock()
+    proc.poll.return_value = None                # still there when the job's last poll arrives
+    tool = HashcatTool()
+    tool._procs[777] = proc
+
+    tool.poll_status(_exhausted_job(tmp_path), assume_dead=True)
+
+    proc.terminate.assert_called_once_with()
+    proc.wait.assert_called_once()
+    assert 777 not in tool._procs
+
+
+def test_a_hashcat_that_will_not_go_is_reaped_by_a_later_poll(tmp_path, mocker):
+    """hashcat sometimes hangs while exiting. Waiting for it would freeze the UI, and dropping
+    the Popen would leave the process defunct for good."""
+    proc = mocker.Mock()
+    proc.poll.return_value = None
+    proc.wait.side_effect = subprocess.TimeoutExpired("hashcat", _TERMINATE_WAIT_SECONDS)
+    tool = HashcatTool()
+    tool._procs[777] = proc
+    job = _exhausted_job(tmp_path)
+
+    tool.poll_status(job, assume_dead=True)
+    assert 777 in tool._procs
+
+    proc.poll.return_value = 1
+    tool.poll_status(job, assume_dead=True)
+    assert 777 not in tool._procs
 
 
 def test_is_running_true_for_live_pid_without_handle():

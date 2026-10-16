@@ -1,5 +1,7 @@
 from wifit3.models.jobs import JobAction, JobState, ToolStatus
-from wifit3.ui.vault.job_pane import JobActionButton, JobRow, JobSkipButton
+from wifit3.ui.vault.job_pane import (
+    JobActionButton, JobPauseButton, JobRow, JobSkipButton,
+)
 
 
 def _job(status=ToolStatus.RUNNING, actions=JobAction.NONE, progress_msg="Running..."):
@@ -61,6 +63,19 @@ def test_skip_button_follows_the_jobs_offered_actions():
     assert button.display is False
 
     button.sync(_job(status=ToolStatus.QUEUED, actions=JobAction.CLEAR))
+    assert button.display is False
+
+
+def test_pause_button_offers_resume_to_a_paused_job_and_nothing_to_an_unreachable_one():
+    button = JobPauseButton(_job(actions=JobAction.STOP | JobAction.PAUSE))
+    assert button.display is True
+    assert str(button.label) == "Pause"
+
+    button.sync(_job(actions=JobAction.STOP | JobAction.RESUME))
+    assert button.resumes is True
+    assert str(button.label) == "Resume"
+
+    button.sync(_job(actions=JobAction.STOP))
     assert button.display is False
 
 

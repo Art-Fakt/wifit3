@@ -46,6 +46,18 @@ class JobActionButton(Button):
         self.variant = "error" if self.stops else "default"
 
 
+class JobPauseButton(Button):
+    def __init__(self, job: JobState):
+        super().__init__(classes="job-pause-btn", compact=True)
+        self.job_id = job.job_id
+        self.sync(job)
+
+    def sync(self, job: JobState) -> None:
+        self.resumes = JobAction.RESUME in job.actions
+        self.display = self.resumes or JobAction.PAUSE in job.actions
+        self.label = "Resume" if self.resumes else "Pause"
+
+
 class JobSkipButton(Button):
     def __init__(self, job: JobState):
         super().__init__("Skip", classes="job-skip-btn", compact=True, variant="warning")
@@ -69,6 +81,7 @@ class JobRow(Horizontal):
         yield ProgressBar(total=100, show_eta=False, classes="job-bar")
         yield Label(self._status_markup(self._job), classes="job-status")
         yield Label(self._detail_markup(self._job), classes="job-detail")
+        yield JobPauseButton(self._job)
         yield JobSkipButton(self._job)
         yield JobActionButton(self._job)
 
@@ -81,6 +94,7 @@ class JobRow(Horizontal):
         self.query_one(".job-status", Label).update(self._status_markup(job))
         self.query_one(".job-detail", Label).update(self._detail_markup(job))
         self.query_one(ProgressBar).update(total=100, progress=self._percent(job))
+        self.query_one(JobPauseButton).sync(job)
         self.query_one(JobSkipButton).sync(job)
         self.query_one(JobActionButton).sync(job)
 
@@ -138,6 +152,7 @@ class JobTrackerPane(Widget):
     JobTrackerPane .job-bar Bar > .bar--bar { background: $panel; }
     JobTrackerPane .job-status { width: 11; margin-right: 1; }
     JobTrackerPane .job-detail { width: 1fr; min-width: 0; overflow-x: hidden; }
+    JobTrackerPane .job-pause-btn { min-width: 10; margin-right: 1; }
     JobTrackerPane .job-skip-btn { min-width: 8; margin-right: 1; }
     JobTrackerPane .job-action-btn { min-width: 8; }
     """
@@ -176,6 +191,12 @@ class JobTrackerPane(Widget):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         button = event.button
+        if isinstance(button, JobPauseButton):
+            if button.resumes:
+                self.app.resume_job(button.job_id)
+            elif self.app.pause_job(button.job_id):
+                self.notify("Pausing job.")
+            return
         if isinstance(button, JobSkipButton):
             if self.app.skip_job_wordlist(button.job_id):
                 self.notify("Skipping to the next wordlist.")

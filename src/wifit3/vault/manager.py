@@ -226,6 +226,12 @@ class JobManager:
         """Move a running job on to the next item of its queue, abandoning the current one."""
         return self._run_action(job_id, JobAction.SKIP)
 
+    def pause_job(self, job_id: str) -> bool:
+        return self._run_action(job_id, JobAction.PAUSE)
+
+    def resume_job(self, job_id: str) -> bool:
+        return self._run_action(job_id, JobAction.RESUME)
+
     def _run_action(self, job_id: str, action: JobAction) -> bool:
         """Hand one of the actions the last poll offered to the owning tool."""
         job = self.jobs.get(job_id)
