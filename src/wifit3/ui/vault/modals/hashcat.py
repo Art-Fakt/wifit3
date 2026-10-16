@@ -1,7 +1,7 @@
 from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical, Horizontal
+from textual.containers import Vertical, Horizontal, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, Input, Label
 from rich.markup import escape
@@ -29,6 +29,14 @@ def _default_hashcat_path() -> str:
     return "/usr/bin/hashcat"
 
 
+class _RemoveButton(Button):
+    """The `X` beside one chosen wordlist; ``path`` is the wordlist it removes."""
+
+    def __init__(self, path: str) -> None:
+        super().__init__("X", variant="error", compact=True, classes="hashcat-remove")
+        self.path = path
+
+
 class HashcatConfigModal(ModalScreen[dict]):
     """Configuration modal for Hashcat jobs."""
 
@@ -37,6 +45,11 @@ class HashcatConfigModal(ModalScreen[dict]):
     def __init__(self) -> None:
         super().__init__()
         self._wordlists: list[str] = list(Config.wordlist_paths)
+
+    # CSS, not DEFAULT_CSS: the app's `Button { min-width: 12 }` outranks any DEFAULT_CSS rule.
+    CSS = """
+    HashcatConfigModal #hashcat-clear, HashcatConfigModal .hashcat-remove { min-width: 0; }
+    """
 
     DEFAULT_CSS = """
     HashcatConfigModal {
@@ -59,11 +72,30 @@ class HashcatConfigModal(ModalScreen[dict]):
     .hashcat-label {
         margin-top: 1;
     }
+    #hashcat-choose-row {
+        height: auto;
+    }
     #hashcat-choose {
         width: 1fr;
     }
+    #hashcat-clear {
+        width: 7;
+    }
+    .hashcat-remove {
+        width: 3;
+    }
     #hashcat-wordlists {
-        margin-left: 2;
+        height: auto;
+        max-height: 10;
+    }
+    .hashcat-wordlist-row {
+        height: 1;
+    }
+    .hashcat-wordlist-name {
+        width: 1fr;
+        margin-left: 1;
+        text-wrap: nowrap;
+        text-overflow: ellipsis;
     }
     #hashcat-buttons {
         margin-top: 2;
@@ -80,8 +112,10 @@ class HashcatConfigModal(ModalScreen[dict]):
             yield PathInput(_default_hashcat_path(), title="Select hashcat executable",
                             id="hashcat-exe")
             
-            yield Button(f"{BROWSE_GLYPH} Choose wordlists", "primary", id="hashcat-choose")
-            yield Label(self._wordlists_markup(), id="hashcat-wordlists")
+            with Horizontal(id="hashcat-choose-row"):
+                yield Button(f"{BROWSE_GLYPH} Choose wordlists", "primary", id="hashcat-choose")
+                yield Button("Clear", variant="error", id="hashcat-clear")
+            yield VerticalScroll(id="hashcat-wordlists")
             
             args = Config.hashcat_args or ""
             yield Label("Hashcat Args:", classes="hashcat-label")
@@ -94,11 +128,36 @@ class HashcatConfigModal(ModalScreen[dict]):
                 yield Button("Cancel", variant="error", id="hashcat-cancel")
                 yield Button("Launch", variant="success", id="hashcat-launch")
 
-    def _wordlists_markup(self) -> str:
+    async def on_mount(self) -> None:
+        await self._show_wordlists()
+
+    async def _show_wordlists(self) -> None:
+        self.query_one("#hashcat-clear", Button).display = bool(self._wordlists)
+        rows = self.query_one("#hashcat-wordlists", VerticalScroll)
+        await rows.remove_children()
         if not self._wordlists:
-            return "[dim]none chosen[/dim]"
-        return "\n".join(f"[bold]{number}:[/bold] {escape(Path(path).name)}"
-                        for number, path in enumerate(self._wordlists, 1))
+            await rows.mount(Label("[dim]none chosen[/dim]"))
+            return
+        await rows.mount_all(
+            Horizontal(_RemoveButton(path),
+                       Label(f"[bold]{number}:[/bold] {escape(Path(path).name)}  "
+                             f"[dim]{escape(str(Path(path).parent))}[/dim]",
+                             classes="hashcat-wordlist-name"),
+                       classes="hashcat-wordlist-row")
+            for number, path in enumerate(self._wordlists, 1))
+
+    @on(Button.Pressed, ".hashcat-remove")
+    async def _remove_wordlist(self, event: Button.Pressed) -> None:
+        event.stop()
+        assert isinstance(event.button, _RemoveButton)
+        self._wordlists.remove(event.button.path)
+        await self._show_wordlists()
+
+    @on(Button.Pressed, "#hashcat-clear")
+    async def _clear_wordlists(self, event: Button.Pressed) -> None:
+        event.stop()
+        self._wordlists = []
+        await self._show_wordlists()
 
     @on(Button.Pressed, "#hashcat-choose")
     def _choose_wordlists(self, event: Button.Pressed) -> None:
@@ -110,11 +169,11 @@ class HashcatConfigModal(ModalScreen[dict]):
             self._wordlists_chosen,
         )
 
-    def _wordlists_chosen(self, paths: Optional[list[Path]]) -> None:
+    async def _wordlists_chosen(self, paths: Optional[list[Path]]) -> None:
         if paths is None:
             return
         self._wordlists = [str(path) for path in paths]
-        self.query_one("#hashcat-wordlists", Label).update(self._wordlists_markup())
+        await self._show_wordlists()
 
     @on(Checkbox.Changed, "#hashcat-self-test-disable")
     def _toggle_self_test_disable(self, event: Checkbox.Changed) -> None:

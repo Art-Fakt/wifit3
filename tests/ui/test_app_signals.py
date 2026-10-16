@@ -7,7 +7,8 @@ import pytest
 
 from wifit3.ui.app import WifiteApp
 
-pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals only")
+if sys.platform == "win32":
+    pytest.skip("POSIX signals only", allow_module_level=True)
 
 
 @pytest.mark.usefixtures("no_usb_devices")  # ui/conftest.py

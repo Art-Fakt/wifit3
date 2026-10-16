@@ -98,7 +98,7 @@ async def test_saved_args_prefill_the_modal_and_come_back_on_launch():
         await pilot.pause(0)
         assert app.screen.query_one("#hashcat-self-test-disable", Checkbox).value
         app.screen.query_one("#hashcat-exe", Input).value = r"D:\hashcat.exe"
-        app.screen._wordlists_chosen([Path(r"D:\rockyou.txt")])
+        await app.screen._wordlists_chosen([Path(r"D:\rockyou.txt")])
         app.screen.query_one("#hashcat-launch", Button).press()
         await pilot.pause(0)
 
@@ -128,11 +128,12 @@ async def test_the_modal_reads_back_the_wordlists_it_was_given():
     async with app.run_test() as pilot:
         app.push_screen(HashcatConfigModal())
         await pilot.pause(0)
-        shown = str(app.screen.query_one("#hashcat-wordlists", Label).content)
-        assert "1:" in shown and "a.txt" in shown
-        assert "2:" in shown and "b.txt" in shown
+        shown = [str(label.content) for label in app.screen.query(".hashcat-wordlist-name")]
+        assert len(shown) == 2
+        assert "1:" in shown[0] and "a.txt" in shown[0]
+        assert "2:" in shown[1] and "b.txt" in shown[1]
 
-        app.screen._wordlists_chosen(None)              # a cancelled picker keeps the selection
+        await app.screen._wordlists_chosen(None)        # a cancelled picker keeps the selection
         await pilot.pause(0)
         assert app.screen._wordlists == [r"D:\a.txt", r"D:\b.txt"]
 
@@ -151,3 +152,57 @@ async def test_launch_is_refused_without_a_wordlist():
 
         assert refusals and not dismissed
         assert isinstance(app.screen, HashcatConfigModal)
+
+
+async def test_x_removes_one_wordlist_and_clear_removes_them_all(tmp_path):
+    Config.wordlist_paths = [str(tmp_path / "a.txt"), str(tmp_path / "b.txt"), str(tmp_path / "c.txt")]
+    app = _Host()
+    async with app.run_test() as pilot:
+        dismissed = []
+        app.push_screen(HashcatConfigModal(), dismissed.append)
+        await pilot.pause()
+        modal = app.screen
+        rows = modal.query_one("#hashcat-wordlists")
+        clear = modal.query_one("#hashcat-clear", Button)
+        assert clear.display
+
+        next(b for b in modal.query(mod._RemoveButton) if b.path.endswith("b.txt")).press()
+        await pilot.pause()
+        names = [str(label.content) for label in rows.query(".hashcat-wordlist-name")]
+        assert len(names) == 2
+        assert names[0].startswith("[bold]1:[/bold] a.txt") and names[1].startswith("[bold]2:[/bold] c.txt")
+        assert str(tmp_path) in names[0], "the parent directory tells same-named files apart"
+
+        clear.press()
+        await pilot.pause()
+        assert modal._wordlists == []
+        assert not clear.display
+        assert "none chosen" in str(rows.query_one(Label).content)
+        assert Config.wordlist_paths == [str(tmp_path / "a.txt"), str(tmp_path / "b.txt"),
+                                         str(tmp_path / "c.txt")], "nothing is saved before Launch"
+
+
+async def test_launch_saves_what_is_left_after_a_removal(tmp_path):
+    Config.wordlist_paths = [str(tmp_path / "a.txt"), str(tmp_path / "b.txt")]
+    app = _Host()
+    async with app.run_test() as pilot:
+        dismissed = []
+        app.push_screen(HashcatConfigModal(), dismissed.append)
+        await pilot.pause()
+        modal = app.screen
+        modal.query_one("#hashcat-exe", Input).value = str(tmp_path / "hashcat")
+        modal.query(mod._RemoveButton).first().press()
+        await pilot.pause()
+        modal.query_one("#hashcat-launch", Button).press()
+        await pilot.pause()
+
+    assert dismissed[0]["wordlists"] == [str(tmp_path / "b.txt")]
+    assert Config.wordlist_paths == [str(tmp_path / "b.txt")]
+
+
+async def test_clear_is_hidden_when_no_wordlist_is_chosen():
+    app = _Host()
+    async with app.run_test() as pilot:
+        app.push_screen(HashcatConfigModal())
+        await pilot.pause(0)
+        assert not app.screen.query_one("#hashcat-clear", Button).display

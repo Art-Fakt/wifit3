@@ -340,3 +340,42 @@ async def test_spacebar_on_a_directory_still_expands_it(tree_fixture):
 
         assert folder.is_expanded
         assert str(app.screen.query_one("#picker-select", Button).label) == "Select"
+
+
+async def test_a_typed_glob_adds_its_matching_files(tree_fixture):
+    """Enter on a pattern checks every file it matches, keeps what was already checked, and
+    skips a directory whose name matches."""
+    wordlists = tree_fixture / "wordlists"
+    (wordlists / "top29m.txt").write_text("hunter2\n", encoding="utf-8")
+    (wordlists / "words.lst").write_text("letmein\n", encoding="utf-8")
+    (wordlists / "nested.txt").mkdir()
+    rockyou = wordlists / "rockyou.txt"
+    app = _Host()
+    async with app.run_test() as pilot:
+        picked = []
+        app.push_screen(PathPickerModal(wordlists, multiple=True, checked=[rockyou]), picked.append)
+        await pilot.pause()
+        picker = app.screen
+        box = picker.query_one("#picker-path", Input)
+        select = picker.query_one("#picker-select", Button)
+        toasts = []
+        picker.notify = lambda *a, **k: toasts.append(a)
+
+        box.value = str(wordlists / "*.txt")
+        await box.action_submit()
+        await pilot.pause()
+        assert app.screen is picker, "a glob adds, it doesn't dismiss"
+        assert str(select.label) == "Select (2)"
+        assert toasts == [("Added 1 files",)]
+
+        toasts.clear()
+        box.value = str(wordlists / "*.zip")
+        await box.action_submit()
+        await pilot.pause()
+        assert toasts == [(f"No files match: {wordlists / '*.zip'}",)]
+        assert str(select.label) == "Select (2)"
+
+        select.press()
+        await pilot.pause()
+
+    assert picked == [[rockyou, wordlists / "top29m.txt"]]

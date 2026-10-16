@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ctypes
 import getpass
+import glob
 import string
 import sys
 from pathlib import Path
@@ -151,7 +152,7 @@ class PathPickerModal(ModalScreen[Optional[list[Path]]]):
     DEFAULT_CSS = """
     PathPickerModal { align: center middle; }
     PathPickerModal #dialog {
-        width: 72; max-width: 100%; height: 28; max-height: 100%;
+        width: 72; max-width: 100%; height: 90%; max-height: 100%;
         border: thick $primary; background: $surface; padding: 1 2;
     }
     PathPickerModal #title { text-style: bold; margin-bottom: 1; }
@@ -270,12 +271,24 @@ class PathPickerModal(ModalScreen[Optional[list[Path]]]):
             return
         if _is_dir(path):
             self._reroot(path)
+        elif not path.is_file() and self._multiple:
+            self._check_glob_matches(path)
         elif not path.is_file():
             self.notify(f"No such file: {path}", severity="error")
         elif self._multiple:
             self._toggle_check(path)        # a typed-in file joins the selection
         else:
             self._dismiss_paths([path])
+
+    def _check_glob_matches(self, pattern: Path) -> None:
+        matches = [Path(match) for match in sorted(glob.glob(str(pattern))) if Path(match).is_file()]
+        if not matches:
+            self.notify(f"No files match: {pattern}", severity="error")
+            return
+        added = [match for match in matches if match not in self._checked]
+        for match in added:
+            self._toggle_check(match)
+        self.notify(f"Added {len(added)} files")
 
     def _dismiss_paths(self, paths: list[Path]) -> None:
         self.dismiss([relative_to_cwd(path) for path in paths] if self._prefer_relative else paths)
