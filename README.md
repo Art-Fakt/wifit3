@@ -65,7 +65,7 @@
 | Realtek RTL8187L | 2.4 GHz | ALFA AWUS036**H** |
 | Realtek RTL8188EUS | 2.4 GHz | TP-Link TL-WN722N v2/v3 |
 | Ralink RT2570 | 2.4 GHz | Buffalo Nintendo Wi-Fi USB Controller |
-| Ralink RT3070 | 2.4 GHz | ALFA AWUS036**NH** |
+| Ralink RT3070 | 2.4 GHz | ALFA AWUS036**NH**, TP-Link TL-WN7200ND |
 | Ralink RT5370 | 2.4 GHz | LOTEKOO 150 Mbps |
 | Ralink RT5372 | 2.4 GHz | Panda PAU05/PAU06 |
 | Ralink RT5572 | 2.4 / 5 GHz | Panda PAU09 N600 |
