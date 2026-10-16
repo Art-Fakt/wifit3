@@ -21,9 +21,8 @@ class VaultTool(ABC):
 
     @abstractmethod
     def poll_status(self, job: JobState, assume_dead: bool = False) -> ToolResult:
-        """Tails the physical log file, or queries remote API (via urllib). When
-        ``assume_dead`` is set the process is known gone; resolve final status from output.
-        The result's ``actions`` are what the job will accept until the next poll."""
+        """When ``assume_dead`` is set the process is known gone. The result's ``actions``
+        are what the job will accept until the next poll."""
         pass
 
     def apply(self, action: JobAction, job: JobState) -> bool:

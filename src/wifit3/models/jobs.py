@@ -63,3 +63,7 @@ class ToolResult:
     value: Optional[str] = None # The progress string or error msg
     result_data: Optional[dict] = None # Extra data (e.g. {"key": "0xdeadbeef"})
     actions: JobAction = JobAction.NONE
+
+    def __str__(self) -> str:
+        return (f"status={self.status.value}, value={self.value}, "
+                f"result_data={self.result_data}, actions={self.actions.name}")

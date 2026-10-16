@@ -4,6 +4,7 @@ from textual.binding import Binding
 from textual.containers import Vertical, Horizontal
 from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, Input, Label
+from rich.markup import escape
 
 from wifit3.persist.config import Config, ConfigError
 from wifit3.ui.path_picker import BROWSE_GLYPH, PathInput, PathPickerModal
@@ -58,6 +59,12 @@ class HashcatConfigModal(ModalScreen[dict]):
     .hashcat-label {
         margin-top: 1;
     }
+    #hashcat-choose {
+        width: 1fr;
+    }
+    #hashcat-wordlists {
+        margin-left: 2;
+    }
     #hashcat-buttons {
         margin-top: 2;
         align: right middle;
@@ -73,10 +80,8 @@ class HashcatConfigModal(ModalScreen[dict]):
             yield PathInput(_default_hashcat_path(), title="Select hashcat executable",
                             id="hashcat-exe")
             
-            yield Label("Wordlists:", classes="hashcat-label")
+            yield Button(f"{BROWSE_GLYPH} Choose wordlists", "primary", id="hashcat-choose")
             yield Label(self._wordlists_markup(), id="hashcat-wordlists")
-            yield Button(f"{BROWSE_GLYPH} Choose wordlists", "default", id="hashcat-choose",
-                         compact=True)
             
             args = Config.hashcat_args or ""
             yield Label("Hashcat Args:", classes="hashcat-label")
@@ -90,19 +95,18 @@ class HashcatConfigModal(ModalScreen[dict]):
                 yield Button("Launch", variant="success", id="hashcat-launch")
 
     def _wordlists_markup(self) -> str:
-        """The chosen wordlists, in the order hashcat will be run against them."""
         if not self._wordlists:
             return "[dim]none chosen[/dim]"
-        names = ", ".join(Path(path).name for path in self._wordlists)
-        return f"[bold]{len(self._wordlists)}:[/bold] {names}"
+        return "\n".join(f"[bold]{number}:[/bold] {escape(Path(path).name)}"
+                        for number, path in enumerate(self._wordlists, 1))
 
     @on(Button.Pressed, "#hashcat-choose")
     def _choose_wordlists(self, event: Button.Pressed) -> None:
         event.stop()
         start = self._wordlists[0] if self._wordlists else str(Path.home())
         self.app.push_screen(
-            PathPickerModal(start, title="Select wordlists", multiple=True,
-                            ticked=[Path(path) for path in self._wordlists]),
+            PathPickerModal(start, title="Select wordlist(s)", multiple=True,
+                            checked=[Path(path) for path in self._wordlists]),
             self._wordlists_chosen,
         )
 

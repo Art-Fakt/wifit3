@@ -1,4 +1,12 @@
 from wifit3.models import AccessPoint, HandshakeMessage, Handshake
+from wifit3.models.jobs import JobAction, ToolResult, ToolStatus
+
+
+def test_tool_result_reads_as_one_line_in_the_log():
+    result = ToolResult(status=ToolStatus.RUNNING, value="Running (4.13%)",
+                        actions=JobAction.STOP | JobAction.SKIP)
+    assert str(result) == ("status=RUNNING, value=Running (4.13%), result_data=None, "
+                           "actions=STOP|SKIP")
 
 
 def test_access_point_model_defaults():

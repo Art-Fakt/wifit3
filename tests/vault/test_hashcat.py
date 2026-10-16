@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from wifit3.vault.tools.hashcat import (
-    HashcatQueue, HashcatTool, _read_log_tail, _split_args, expand_wordlists,
+    WordlistQueue, HashcatTool, _read_log_tail, _split_args, expand_wordlists,
 )
 from wifit3.models import PersistedCapture
 from wifit3.models.access_point import CaptureType
@@ -272,6 +272,72 @@ def test_apply_skip_abandons_the_running_wordlist_for_the_next(tmp_path, mocker)
     assert popen.call_args.args[0][-1] == str(second.resolve())
 
 
+def _pidfile_job(tmp_path, exe: Path, wordlist: Path) -> JobState:
+    (tmp_path / "a.hc22000").write_text("WPA*01*deadbeef\n")
+    exe.write_text("")
+    wordlist.write_text("one\n")
+    return _job(capture_path=str(tmp_path / "a.hc22000"),
+                config={"hashcat_exe": str(exe), "wordlists": [str(wordlist)]})
+
+
+def test_launch_removes_a_pidfile_left_behind_by_a_killed_run(tmp_path, mocker):
+    """hashcat refuses to start while the pid in its session pidfile is alive, and the run we
+    killed never got to remove that file."""
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    pidfile = tmp_path / "hashcat.pid"
+    pidfile.write_bytes(dead.pid.to_bytes(4, "little"))
+    _fake_popen(mocker)
+    job = _pidfile_job(tmp_path, tmp_path / "hashcat.exe", tmp_path / "a.txt")
+
+    HashcatTool().launch(job, _cap(tmp_path))
+
+    assert not pidfile.exists()
+
+
+def test_launch_keeps_the_pidfile_of_a_hashcat_that_is_really_running(tmp_path, mocker):
+    """The pidfile is hashcat's guard against two instances sharing a potfile; only a dead pid
+    makes it stale."""
+    running = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        pidfile = tmp_path / "hashcat.pid"
+        pidfile.write_bytes(running.pid.to_bytes(4, "little"))
+        _fake_popen(mocker)
+        # named for the live process above, so the pid's image matches the configured exe
+        job = _pidfile_job(tmp_path, tmp_path / (Path(sys.executable).stem + ".exe"),
+                           tmp_path / "a.txt")
+
+        HashcatTool().launch(job, _cap(tmp_path))
+
+        assert pidfile.exists()
+    finally:
+        running.kill()
+        running.wait(timeout=5)
+
+
+def test_skip_starts_the_next_wordlist_only_once_the_old_process_is_gone(tmp_path, mocker):
+    """hashcat refuses to start while another instance of the same executable is alive, so the
+    skipped process has to be reaped before the next one is launched."""
+    first, second = tmp_path / "a.txt", tmp_path / "b.txt"
+    first.write_text("one\n")
+    second.write_text("two\n")
+    popen = _fake_popen(mocker)
+    reaped_before_launch = []
+
+    def spawn(*args, **kwargs):
+        reaped_before_launch.append(popen.return_value.wait.called)
+        return popen.return_value
+    popen.side_effect = spawn
+    tool = HashcatTool()
+    job = _queued_job(tmp_path, [first, second])
+    tool.launch(job, _cap(tmp_path))
+
+    assert tool.apply(JobAction.SKIP, job) is True
+
+    assert reaped_before_launch == [False, True]
+    assert popen.call_args.args[0][-1] == str(second.resolve())
+
+
 def test_apply_skip_is_refused_on_the_last_wordlist(tmp_path, mocker):
     wordlist = tmp_path / "a.txt"
     wordlist.write_text("one\n")
@@ -336,7 +402,7 @@ def test_expand_wordlists_lists_the_files_inside_a_directory(tmp_path):
     (directory / "nested").mkdir()
 
     assert expand_wordlists([str(directory)]) == [
-        (directory / "first.txt").resolve(), (directory / "second.txt").resolve()]
+        str((directory / "first.txt").resolve()), str((directory / "second.txt").resolve())]
 
 
 def test_expand_wordlists_keeps_the_requested_order_of_files(tmp_path):
@@ -344,7 +410,8 @@ def test_expand_wordlists_keeps_the_requested_order_of_files(tmp_path):
     second.write_text("two\n")
     first.write_text("one\n")
 
-    assert expand_wordlists([str(second), str(first)]) == [second.resolve(), first.resolve()]
+    assert expand_wordlists([str(second), str(first)]) == [str(second.resolve()),
+                                                           str(first.resolve())]
 
 
 def test_expand_wordlists_drops_what_does_not_exist(tmp_path):
@@ -421,7 +488,7 @@ def test_parse_progress_is_none_without_a_status_line():
 
 
 def test_queue_label_is_empty_without_wordlists():
-    assert HashcatQueue().label == ""
+    assert WordlistQueue().label == ""
 
 
 # ----- process identity -----------------------------------------------------

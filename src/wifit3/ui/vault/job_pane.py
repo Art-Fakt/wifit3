@@ -12,7 +12,7 @@ _PERCENT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%")
 
 
 def _has_runtime_status(job: JobState) -> bool:
-    """Whether the tool has reported anything yet, so a starting job reads as STARTING."""
+    """Whether the tool has reported progress for this job yet."""
     message = job.progress_msg or ""
     return bool(_PERCENT_RE.search(message) or " · " in message)
 

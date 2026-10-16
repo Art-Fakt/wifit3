@@ -17,7 +17,7 @@ from textual.widgets import Button, DirectoryTree, Input, Label, Tree
 from rich.text import Text
 
 BROWSE_GLYPH = "\U0001F4C1"  # folder emoji/icon
-TICK_GLYPH = "✓"        # marks an entry already picked
+CHECK_GLYPH = "✅"
 
 
 def _is_dir(path: Path) -> bool:
@@ -100,13 +100,16 @@ class _RootButton(Button):
 
 
 class _PickerTree(DirectoryTree):
-    # Space is the stock expand/collapse key; the dialog needs it for ticking files too.
-    BINDINGS = [Binding("space", "screen.toggle_tick", "Add/remove", show=False)]
+    # Bind spacebar to select files alongside directory expand/collapse.
+    BINDINGS = [Binding("space", "screen.toggle_check", "Add/remove", show=False)]
+    COMPONENT_CLASSES = {"picker-tree--checked"}
+    DEFAULT_CSS = """
+    _PickerTree > .picker-tree--checked { color: $text; background: $success-muted; }
+    """
 
-    def __init__(self, path: Path, *, ticked: Optional[list[Path]] = None,
-                 id: Optional[str] = None) -> None:
+    def __init__(self, path: Path, *, checked: list[Path], id: Optional[str] = None) -> None:
         super().__init__(path, id=id)
-        self.ticked = ticked if ticked is not None else []
+        self.checked = checked
 
     def reset_node(self, node, label, data=None):
         """Label filesystem roots with the path: a Windows drive root and POSIX ``/`` both have
@@ -115,12 +118,24 @@ class _PickerTree(DirectoryTree):
             label = str(data.path)
         return super().reset_node(node, label, data)
 
+    def refresh_path(self, path: Path) -> None:
+        """Repaint the row for ``path``: the tree renders each row once and caches the result."""
+        pending = list(self.root.children)
+        while pending:
+            node = pending.pop()
+            if node.data is not None and node.data.path == path:
+                node.refresh()
+                return
+            pending.extend(node.children)
+
     def render_label(self, node, base_style, style):
-        """Mark the entries picked so far, so a multi-file selection is visible in the tree."""
         label = super().render_label(node, base_style, style)
         entry = node.data
-        if entry is not None and entry.path in self.ticked:
-            return Text(f"{TICK_GLYPH} ", style=style) + label
+        if entry is not None and entry.path in self.checked:
+            label = Text(CHECK_GLYPH + " ") + label[len(self.ICON_FILE):]
+            label.stylize_before(
+                self.get_component_rich_style("picker-tree--checked", partial=True))
+        label.stylize(style, 0, len(self.ICON_FILE))    # highlight the icon with its row
         return label
 
 
@@ -130,8 +145,7 @@ class _DirectoriesOnlyTree(_PickerTree):
 
 
 class PathPickerModal(ModalScreen[Optional[list[Path]]]):
-    """Pick files or a directory. Dismisses with the chosen paths, or None if cancelled.
-    With ``multiple``, space ticks the highlighted file and Select returns every tick."""
+    """Pick files or a directory. Dismisses with the chosen paths, or None if cancelled."""
 
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
     DEFAULT_CSS = """
@@ -149,20 +163,21 @@ class PathPickerModal(ModalScreen[Optional[list[Path]]]):
     PathPickerModal #picker-roots Button:hover { background: $primary; }
     PathPickerModal #picker-roots Button.-disabled { color: $text-disabled; }
     PathPickerModal DirectoryTree { height: 1fr; margin-top: 1; border: round $primary; }
+    PathPickerModal #picker-hint { height: 1; color: $text-muted; }
     PathPickerModal #buttons { align: right middle; height: auto; margin-top: 1; }
     PathPickerModal #buttons Button { margin-left: 1; }
     """
 
     def __init__(self, start: str | Path, *, directories_only: bool = False,
                  title: str = "Select", prefer_relative: bool = False,
-                 multiple: bool = False, ticked: Iterable[Path] = ()) -> None:
+                 multiple: bool = False, checked: Iterable[Path] = ()) -> None:
         super().__init__()
         self._start = Path(start).expanduser()
         self._directories_only = directories_only
         self._title = title
         self._prefer_relative = prefer_relative
         self._multiple = multiple
-        self._ticked: list[Path] = [Path(path) for path in ticked]
+        self._checked: list[Path] = [Path(path) for path in checked]
 
     def compose(self) -> ComposeResult:
         root = self._start if _is_dir(self._start) else _nearest_dir(self._start)
@@ -174,7 +189,9 @@ class PathPickerModal(ModalScreen[Optional[list[Path]]]):
                 for label, target in picker_roots():
                     yield _RootButton(label, target)
             yield Input(str(self._start), id="picker-path")
-            yield tree(root, ticked=self._ticked, id="picker-tree")
+            yield tree(root, checked=self._checked, id="picker-tree")
+            if self._multiple:
+                yield Label("Select multiple files with spacebar or click", id="picker-hint")
             with Horizontal(id="buttons"):
                 yield Button("Cancel", "default", id="picker-cancel")
                 yield Button(self._select_label(), "primary", id="picker-select")
@@ -193,7 +210,6 @@ class PathPickerModal(ModalScreen[Optional[list[Path]]]):
     def on_mount(self) -> None:
         self._sync_root()
         if self._multiple:
-            # Ticking is a key on the tree, so the tree starts focused rather than the path box.
             self.query_one("#picker-tree", _PickerTree).focus()
 
     @on(Button.Pressed, ".picker-root")
@@ -212,39 +228,37 @@ class PathPickerModal(ModalScreen[Optional[list[Path]]]):
 
     @on(Button.Pressed, "#picker-select")
     def _select(self, event) -> None:
-        if self._ticked:
-            self._dismiss_paths(list(self._ticked))
+        if self._checked:
+            self._dismiss_paths(list(self._checked))
             return
         self._accept(Path(self.query_one("#picker-path", Input).value).expanduser())
 
-    @on(Tree.NodeSelected)
-    def _tick_node(self, event: Tree.NodeSelected) -> None:
-        """Enter on a file ticks it too, for anyone not reaching for space."""
-        entry = event.node.data
-        if self._multiple and entry is not None and not _is_dir(entry.path):
-            self._toggle_tick(entry.path)
+    @on(DirectoryTree.FileSelected)
+    def _check_node(self, event: DirectoryTree.FileSelected) -> None:
+        """Clicking a file, or pressing enter on it, selects it as well."""
+        if self._multiple:
+            self._toggle_check(event.path)
 
-    def action_toggle_tick(self) -> None:
-        """Space on a file ticks it; on a directory it stays the tree's expand/collapse."""
+    def action_toggle_check(self) -> None:
         node = self.query_one("#picker-tree", _PickerTree).cursor_node
         if node is None:
             return
         entry = node.data
         if self._multiple and entry is not None and not _is_dir(entry.path):
-            self._toggle_tick(entry.path)
+            self._toggle_check(entry.path)
         else:
             node.toggle()
 
-    def _toggle_tick(self, path: Path) -> None:
-        if path in self._ticked:
-            self._ticked.remove(path)
+    def _toggle_check(self, path: Path) -> None:
+        if path in self._checked:
+            self._checked.remove(path)
         else:
-            self._ticked.append(path)
-        self.query_one("#picker-tree", _PickerTree).refresh()
+            self._checked.append(path)
+        self.query_one("#picker-tree", _PickerTree).refresh_path(path)
         self.query_one("#picker-select", Button).label = self._select_label()
 
     def _select_label(self) -> str:
-        return f"Select ({len(self._ticked)})" if self._ticked else "Select"
+        return f"Select ({len(self._checked)})" if self._checked else "Select"
 
     def _accept(self, path: Path) -> None:
         """Dismiss with ``path``, or re-root the tree when it's a directory we can't return."""
@@ -259,7 +273,7 @@ class PathPickerModal(ModalScreen[Optional[list[Path]]]):
         elif not path.is_file():
             self.notify(f"No such file: {path}", severity="error")
         elif self._multiple:
-            self._toggle_tick(path)     # a typed-in file joins the ticks; Select finishes
+            self._toggle_check(path)        # a typed-in file joins the selection
         else:
             self._dismiss_paths([path])
 
@@ -302,7 +316,7 @@ class PathInput(Horizontal):
 
     def compose(self) -> ComposeResult:
         yield Input(self._value, placeholder=self._placeholder, id=self._input_id)
-        yield Button(BROWSE_GLYPH, "default", id="browse")
+        yield Button(BROWSE_GLYPH, "primary", id="browse")
 
     @property
     def value(self) -> str:

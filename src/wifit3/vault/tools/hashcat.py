@@ -3,6 +3,7 @@ import os
 import shlex
 import subprocess
 import json
+import time
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Dict, Optional
@@ -17,11 +18,11 @@ logger = logging.getLogger(__name__)
 _STILL_ACTIVE = 259                             # GetExitCodeProcess: process has not exited
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 _LOG_TAIL_BYTES = 256 * 1024
+_EXIT_WAIT_SECONDS = 5.0
 
 
 def _read_log_tail(path, limit: int = _LOG_TAIL_BYTES, start: int = 0) -> list[str]:
-    """Up to ``limit`` bytes of whole lines from the end of the log, never reading before
-    ``start`` (where the running process began writing)."""
+    """Up to ``limit`` bytes of whole lines from the end of the log."""
     if not path or not os.path.exists(path):
         return []
     try:
@@ -50,30 +51,28 @@ def _split_args(raw: str) -> list[str]:
     return [token.strip('"') for token in shlex.split(raw, posix=False)]
 
 
-def expand_wordlists(requested: list[str]) -> list[Path]:
-    """One path per hashcat run: a requested directory contributes the files directly inside it."""
-    expanded: list[Path] = []
-    for raw in requested:
+def expand_wordlists(wordlist_paths: list[str]) -> list[str]:
+    """The existing files among ``wordlist_paths``; a directory contributes the files inside it."""
+    expanded: list[str] = []
+    for raw in wordlist_paths:
         path = Path(raw).expanduser()
         if path.is_dir():
-            expanded.extend(sorted(child.resolve() for child in path.iterdir() if child.is_file()))
+            children = sorted(child.resolve() for child in path.iterdir() if child.is_file())
+            expanded.extend(str(child) for child in children)
         elif path.is_file():
-            expanded.append(path.resolve())
+            expanded.append(str(path.resolve()))
     return expanded
 
 
 @dataclass
-class HashcatQueue:
-    """A job's wordlists and which one its process is on. hashcat's own multi-dictionary
-    queue is driven by TTY keypresses, which a windowless child cannot receive on Windows,
-    so wifit3 runs one hashcat per wordlist and advances the queue itself."""
+class WordlistQueue:
     wordlists: list[str] = field(default_factory=list)
     index: int = 0
-    log_offset: int = 0         # where the running process started writing into the job's log
+    log_offset: int = 0         # bytes already in the job's log when the current process started
     stopped: bool = False
 
     @classmethod
-    def from_job(cls, job: JobState) -> "HashcatQueue":
+    def from_job(cls, job: JobState) -> "WordlistQueue":
         known = {f.name for f in fields(cls)}
         return cls(**{k: v for k, v in job.tool_state.items() if k in known})
 
@@ -90,7 +89,8 @@ class HashcatQueue:
 
     @property
     def label(self) -> str:
-        """``rockyou.txt (3/16)``; a lone wordlist carries no counter."""
+        """Current file (``rockyou.txt``), with its position when there are several:
+        ``rockyou.txt (3/16)``."""
         name = Path(self.current).name if self.current else ""
         return f"{name} ({self.index + 1}/{len(self.wordlists)})" if len(self.wordlists) > 1 else name
 
@@ -130,11 +130,12 @@ class HashcatTool(VaultTool):
 
         job.log_path = str(Path(job.capture_path).with_suffix('.hashcat.log').resolve())
         Path(job.log_path).write_bytes(b"")      # one log per job, every wordlist appended to it
-        self._start(job, HashcatQueue(wordlists=[str(path) for path in wordlists]))
+        self._start(job, WordlistQueue(wordlists=wordlists))
 
-    def _start(self, job: JobState, queue: HashcatQueue) -> None:
+    def _start(self, job: JobState, queue: WordlistQueue) -> None:
         """Run hashcat against the queue's current wordlist, appending to the job's log."""
         hashcat_exe = str(job.config.get("hashcat_exe"))
+        self._drop_dead_pidfile(hashcat_exe)
         cmd = [
             hashcat_exe,
             "-m", "22000",
@@ -142,7 +143,7 @@ class HashcatTool(VaultTool):
             "--status",
             "--status-json",
             "--status-timer", "1",
-            *_split_args(str(job.config.get("hashcat_args") or "")),
+            *_split_args(job.config.get("hashcat_args") or ""),
             str(Path(job.capture_path).resolve()),
             str(queue.current),
         ]
@@ -159,8 +160,6 @@ class HashcatTool(VaultTool):
             proc = subprocess.Popen(
                 cmd,
                 cwd=str(Path(hashcat_exe).parent),
-                # Detach stdin: with a real console on stdin hashcat runs interactively (its
-                # [s]/[p]/[q] prompt), reading the same keys Textual needs and freezing the UI.
                 stdin=subprocess.DEVNULL,
                 stdout=f,
                 stderr=subprocess.STDOUT,
@@ -172,9 +171,29 @@ class HashcatTool(VaultTool):
         self._procs[proc.pid] = proc
         job.pid = proc.pid
         queue.write_to(job)
+        logger.info(f"hashcat running on pid {proc.pid} for {queue.label}")
+
+    def _drop_dead_pidfile(self, hashcat_exe: str) -> None:
+        """hashcat refuses to start while the pid in its session pidfile is alive, and a run we
+        killed never gets to remove that file."""
+        candidates = (Path(hashcat_exe).parent / "hashcat.pid",
+                      Path.home() / ".hashcat" / "sessions" / "hashcat.pid",
+                      Path.home() / ".local" / "share" / "hashcat" / "sessions" / "hashcat.pid")
+        for pidfile in candidates:
+            try:
+                recorded = int.from_bytes(pidfile.read_bytes()[:4], "little")
+            except OSError:
+                continue
+            if recorded and not self._is_running(recorded, hashcat_exe):
+                try:
+                    pidfile.unlink()
+                except OSError:
+                    logger.warning(f"Could not remove {pidfile}", exc_info=True)
+                else:
+                    logger.info(f"Removed {pidfile}: hashcat pid {recorded} is gone")
 
     def poll_status(self, job: JobState, assume_dead: bool = False) -> ToolResult:
-        queue = HashcatQueue.from_job(job)
+        queue = WordlistQueue.from_job(job)
         lines = _read_log_tail(job.log_path, start=queue.log_offset)
         progress_msg = self._parse_progress(lines) or "Running..."
 
@@ -184,11 +203,11 @@ class HashcatTool(VaultTool):
         key = self._key_from_potfile(self._potfile(job.capture_path))
         if key is not None:
             self._terminate(job.pid)
-            return ToolResult(status=ToolStatus.SUCCESS, value=f"Cracked! Key: {key}",
-                              result_data={"key": key})
+            return ToolResult(status=ToolStatus.SUCCESS, value=f"Cracked! Key: {key}", result_data={"key": key})
 
         if not assume_dead and self._is_running(job.pid, job.config.get("hashcat_exe")):
-            return ToolResult(status=ToolStatus.RUNNING, value=self._running_msg(progress_msg, queue),
+            return ToolResult(status=ToolStatus.RUNNING,
+                              value=self._running_msg(progress_msg, queue),
                               actions=self._running_actions(queue))
 
         self._terminate(job.pid)
@@ -197,16 +216,16 @@ class HashcatTool(VaultTool):
         if "Exhausted" in progress_msg and queue.has_next:
             queue.index += 1
             self._start(job, queue)
-            return ToolResult(status=ToolStatus.RUNNING, value=self._running_msg("Starting...", queue),
+            return ToolResult(status=ToolStatus.RUNNING,
+                              value=self._running_msg("Starting...", queue),
                               actions=self._running_actions(queue))
         if "Exhausted" in progress_msg:
             return ToolResult(status=ToolStatus.FAILURE, value=self._exhausted_msg(queue))
         reason = self._last_log_message(lines)
-        return ToolResult(status=ToolStatus.ERROR,
-                          value=reason or "hashcat exited without recovering the key")
+        return ToolResult(status=ToolStatus.ERROR, value=reason or "hashcat exited without recovering the key")
 
     def apply(self, action: JobAction, job: JobState) -> bool:
-        queue = HashcatQueue.from_job(job)
+        queue = WordlistQueue.from_job(job)
         if action is JobAction.SKIP:
             if not queue.has_next:
                 return False
@@ -222,15 +241,15 @@ class HashcatTool(VaultTool):
         return False
 
     @staticmethod
-    def _running_actions(queue: HashcatQueue) -> JobAction:
+    def _running_actions(queue: WordlistQueue) -> JobAction:
         return (JobAction.STOP | JobAction.SKIP) if queue.has_next else JobAction.STOP
 
     @staticmethod
-    def _running_msg(progress_msg: str, queue: HashcatQueue) -> str:
+    def _running_msg(progress_msg: str, queue: WordlistQueue) -> str:
         return f"{progress_msg} · {queue.label}" if queue.label else progress_msg
 
     @staticmethod
-    def _exhausted_msg(queue: HashcatQueue) -> str:
+    def _exhausted_msg(queue: WordlistQueue) -> str:
         """What the NOT FOUND badge reports: the one wordlist by name, or how many were tried."""
         if len(queue.wordlists) == 1:
             return Path(queue.wordlists[0]).name
@@ -323,7 +342,7 @@ class HashcatTool(VaultTool):
             k32.CloseHandle(handle)
 
     def _terminate(self, pid) -> None:
-        """Reap a process that has finished on its own."""
+        """Drop this session's handle on ``pid``, terminating the process if it is still running."""
         proc = self._procs.pop(pid, None)
         if proc is not None and proc.poll() is None:
             try:
@@ -332,7 +351,8 @@ class HashcatTool(VaultTool):
                 logger.exception(f"Failed to terminate hashcat pid {pid}")
 
     def _kill(self, job: JobState) -> None:
-        """Stop a process that is still running, ours or one adopted from a previous session."""
+        """Terminate the job's process and wait for it to go: hashcat refuses to start while
+        another instance of the same executable is alive."""
         pid = job.pid
         if not pid:
             return
@@ -342,11 +362,11 @@ class HashcatTool(VaultTool):
                 return
             try:
                 proc.kill()
+                proc.wait(timeout=_EXIT_WAIT_SECONDS)
+                logger.info(f"Killed hashcat pid {pid}")
             except Exception:
                 logger.exception(f"Failed to kill hashcat pid {pid}")
             return
-        # A job adopted from a previous session (no handle we own). Only signal it if still alive
-        # and still hashcat, so a reused PID is left alone. SIGTERM -> TerminateProcess on Windows.
         if not self._is_running(pid, job.config.get("hashcat_exe")):
             return
         try:
@@ -354,6 +374,10 @@ class HashcatTool(VaultTool):
             os.kill(pid, signal.SIGTERM)
         except OSError:
             logger.warning(f"Could not terminate hashcat pid {pid}", exc_info=True)
+            return
+        deadline = time.monotonic() + _EXIT_WAIT_SECONDS
+        while self._pid_alive(pid) and time.monotonic() < deadline:
+            time.sleep(0.05)
 
     def _last_log_message(self, lines: list[str]) -> Optional[str]:
         """hashcat's last human-readable line (skips JSON status, prompts, banners), so a
@@ -369,7 +393,7 @@ class HashcatTool(VaultTool):
         return candidate
 
     def _parse_progress(self, lines: list[str]) -> Optional[str]:
-        """hashcat's own status, from the newest ``--status-json`` line the process has written."""
+        """hashcat's status from the newest ``--status-json`` line in the log."""
         progress_msg = None
         for line in reversed(lines):
             line = line.strip()

@@ -129,7 +129,8 @@ async def test_the_modal_reads_back_the_wordlists_it_was_given():
         app.push_screen(HashcatConfigModal())
         await pilot.pause(0)
         shown = str(app.screen.query_one("#hashcat-wordlists", Label).content)
-        assert "2:" in shown and "a.txt, b.txt" in shown
+        assert "1:" in shown and "a.txt" in shown
+        assert "2:" in shown and "b.txt" in shown
 
         app.screen._wordlists_chosen(None)              # a cancelled picker keeps the selection
         await pilot.pause(0)

@@ -14,7 +14,7 @@ from textual.widgets import Button, Input, Tree
 from wifit3.persist.config import Config
 from wifit3.persist.vault import Vault
 from wifit3.ui.path_picker import (
-    TICK_GLYPH, PathInput, PathPickerModal, _DirectoriesOnlyTree, _nearest_dir, picker_roots,
+    CHECK_GLYPH, PathInput, PathPickerModal, _DirectoriesOnlyTree, _nearest_dir, picker_roots,
     relative_to_cwd,
 )
 from wifit3.ui.pref import PreferencesModal
@@ -206,8 +206,8 @@ async def test_preferences_stores_a_relative_capture_dir(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_multi_select_journey(tree_fixture):
-    """Ticking several files: the marks are visible, the count shows on the button, and
-    Select hands back every tick in the order it was made."""
+    """Several files selected: the marks are visible, the count shows on the button, and
+    Select hands back each one in the order it was chosen."""
     (tree_fixture / "wordlists" / "top29m.txt").write_text("hunter2\n", encoding="utf-8")
     app = _Host()
     async with app.run_test() as pilot:
@@ -219,27 +219,33 @@ async def test_multi_select_journey(tree_fixture):
         tree = picker.query_one("#picker-tree")
         select = picker.query_one("#picker-select", Button)
         assert str(select.label) == "Select"
-        assert tree.has_focus, "space ticks, so the tree owns the keyboard from the start"
+        assert tree.has_focus, "spacebar selects, so the tree owns the keyboard from the start"
+        assert "spacebar" in str(picker.query_one("#picker-hint").content), "the key is not guessable"
 
         by_name = {n.data.path.name: n for n in tree.root.children}
         tree.cursor_line = by_name["top29m.txt"].line
-        await pilot.press("space")                          # the real key, not the action
+        painted = by_name["top29m.txt"].line
+        assert CHECK_GLYPH not in tree.render_line(painted).text  # paints the row, and caches it
+        await pilot.press("space")                          # the real keypress, not the action
         await pilot.pause()
         assert str(select.label) == "Select (1)"
+        # Straight off the painted line: the tree caches rendered rows, so a mark that only
+        # appears on the next mouse move is the failure mode here.
+        assert CHECK_GLYPH in tree.render_line(painted).text
 
         tree.cursor_line = by_name["rockyou.txt"].line
-        picker.action_toggle_tick()
+        picker.action_toggle_check()
         await pilot.pause()
         assert str(select.label) == "Select (2)"
-        assert TICK_GLYPH in str(tree.render_label(by_name["rockyou.txt"], None, None))
+        assert CHECK_GLYPH in str(tree.render_label(by_name["rockyou.txt"], None, None))
 
-        tree.cursor_line = by_name["top29m.txt"].line       # a second press unticks
-        picker.action_toggle_tick()
+        tree.cursor_line = by_name["top29m.txt"].line       # a second press deselects
+        picker.action_toggle_check()
         await pilot.pause()
         assert str(select.label) == "Select (1)"
 
         tree.cursor_line = by_name["top29m.txt"].line
-        picker.action_toggle_tick()
+        picker.action_toggle_check()
         select.press()
         await pilot.pause()
 
@@ -253,7 +259,7 @@ async def test_multi_select_starts_from_what_is_already_chosen(tree_fixture):
     app = _Host()
     async with app.run_test() as pilot:
         picked = []
-        app.push_screen(PathPickerModal(wordlist, multiple=True, ticked=[wordlist]), picked.append)
+        app.push_screen(PathPickerModal(wordlist, multiple=True, checked=[wordlist]), picked.append)
         await pilot.pause()
         picker = app.screen
         assert str(picker.query_one("#picker-select", Button).label) == "Select (1)"
@@ -266,7 +272,7 @@ async def test_multi_select_starts_from_what_is_already_chosen(tree_fixture):
 
 @pytest.mark.asyncio
 async def test_a_single_file_picker_still_hands_back_one_path(tree_fixture):
-    """The single-select contract the rest of the app uses: one path, not a list of ticks."""
+    """The single-select contract the rest of the app uses: one path, not a list."""
     wordlist = tree_fixture / "wordlists" / "rockyou.txt"
     app = _Host()
     async with app.run_test() as pilot:
@@ -281,7 +287,45 @@ async def test_a_single_file_picker_still_hands_back_one_path(tree_fixture):
 
 
 @pytest.mark.asyncio
-async def test_space_on_a_directory_still_expands_it(tree_fixture):
+async def test_clicking_a_file_selects_it(tree_fixture):
+    """Mouse users never find the spacebar, so a click has to select too."""
+    app = _Host()
+    async with app.run_test() as pilot:
+        app.push_screen(PathPickerModal(tree_fixture / "wordlists", multiple=True))
+        await pilot.pause()
+        picker = app.screen
+        tree = picker.query_one("#picker-tree")
+        select = picker.query_one("#picker-select", Button)
+        wordlist = next(n for n in tree.root.children if n.data.path.name == "rockyou.txt")
+
+        await pilot.click(tree, offset=(8, wordlist.line + 1))      # +1 for the tree's border
+        await pilot.pause()
+        assert str(select.label) == "Select (1)"
+
+        await pilot.click(tree, offset=(8, wordlist.line + 1))
+        await pilot.pause()
+        assert str(select.label) == "Select", "clicking again deselects"
+
+
+@pytest.mark.asyncio
+async def test_enter_selects_a_file(tree_fixture):
+    app = _Host()
+    async with app.run_test() as pilot:
+        app.push_screen(PathPickerModal(tree_fixture / "wordlists", multiple=True))
+        await pilot.pause()
+        picker = app.screen
+        tree = picker.query_one("#picker-tree")
+        tree.cursor_line = next(n for n in tree.root.children
+                                if n.data.path.name == "rockyou.txt").line
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert str(picker.query_one("#picker-select", Button).label) == "Select (1)"
+
+
+@pytest.mark.asyncio
+async def test_spacebar_on_a_directory_still_expands_it(tree_fixture):
     app = _Host()
     async with app.run_test() as pilot:
         app.push_screen(PathPickerModal(tree_fixture, multiple=True))

@@ -17,7 +17,6 @@ logger = logging.getLogger(__name__)
 
 
 def _set_actions(job: JobState, offered: JobAction) -> None:
-    """What the UI may offer: the tool's own actions, plus removing a job that is not running."""
     clearable = JobAction.NONE if job.status == ToolStatus.RUNNING else JobAction.CLEAR
     job.actions = offered | clearable
 
@@ -56,7 +55,7 @@ class JobManager:
     def _save(self) -> None:
         jobs_file = self.get_jobs_file()
         data = {k: v.to_dict() for k, v in self.jobs.items()}
-        logger.info(f"Saving {len(data.keys())} jobs to {jobs_file}")
+        logger.debug(f"Saving {len(data.keys())} jobs to {jobs_file}")
         jobs_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
     def reconcile_on_startup(self) -> None:
