@@ -56,7 +56,7 @@
 | MediaTek MT7921AU | 2.4 / 5 GHz | ALFA AWUS036**AXM[L]**, Panda PAU0F |
 | MediaTek MT7925U | 2.4 / 5 GHz | Netgear A9000 |
 | Realtek RTL8812AU | 2.4 / 5 GHz | ALFA AWUS036**ACH** |
-| Realtek RTL8814AU | 2.4 / 5 GHz | ALFA AWUS1900 |
+| Realtek RTL8814AU | 2.4 / 5 GHz | ALFA AWUS1900, ASUS USB-AC68 |
 | Realtek RTL8821AU | 2.4 / 5 GHz | ALFA AWUS036**ACS**, TP-Link Archer T2U Plus/Nano |
 | Realtek RTL8821CU | 2.4 / 5 GHz | Auscoumer 600 Mbps |
 | Realtek RTL8922AU | 2.4 / 5 GHz | ASUS USB-BE93 |
