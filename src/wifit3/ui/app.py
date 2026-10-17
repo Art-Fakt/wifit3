@@ -228,9 +228,7 @@ class WifiteApp(App):
 
     def _toast_job(self, job: JobState) -> None:
         if job.status == ToolStatus.SUCCESS:
-            msg = job.progress_msg
-            key = msg.split("Key:", 1)[1].strip() if "Key:" in msg else msg
-            self.notify(f"SUCCESS  PSK: {key}", title=job.display_name, severity="information")
+            self.notify(f"SUCCESS  PSK: {job.key}", title=job.display_name, severity="information")
         elif job.status == ToolStatus.FAILURE:
             self.notify(f"NOT FOUND  {job.progress_msg}", title=job.display_name, severity="warning")
         elif job.status == ToolStatus.STOPPED:

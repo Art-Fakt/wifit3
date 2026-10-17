@@ -14,6 +14,8 @@ from wifit3.ui.vault.job_pane import JobTrackerPane
 class VaultDrawer(ModalScreen):
     """The Vault drawer overlay."""
 
+    HORIZONTAL_BREAKPOINTS = [(0, "-narrow"), (90, "-wide")]
+
     BINDINGS = [
         Binding("v", "dismiss_drawer", "Close", show=False),
         Binding("escape", "dismiss_drawer", "Close", show=True),
@@ -34,6 +36,10 @@ class VaultDrawer(ModalScreen):
         offset-y: 100%;
         transition: offset 200ms in_out_cubic;
     }
+    VaultDrawer.-narrow _CapturePanel .tools, VaultDrawer.-narrow _CapturePanel .actions {
+        layout: vertical;
+    }
+    VaultDrawer.-narrow _CapturePanel .spacer { display: none; }
     VaultDrawer.open #vault-content {
         offset-y: 0%;
     }

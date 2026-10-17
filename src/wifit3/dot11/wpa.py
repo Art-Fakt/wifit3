@@ -22,11 +22,6 @@ from wifit3.dot11.eapol import (
 _M2_KEY_INFO = 0x010A
 
 
-def derive_pmk(psk: str, ssid: str) -> bytes:
-    """Derive 32-byte Pairwise Master Key (PMK) via PBKDF2-HMAC-SHA1."""
-    return hashlib.pbkdf2_hmac("sha1", psk.encode("utf-8"), ssid.encode("utf-8"), 4096, 32)
-
-
 def prf_512(key: bytes, prefix: bytes, data: bytes) -> bytes:
     """802.11i PRF-512 pseudo-random function using HMAC-SHA1."""
     out = b""

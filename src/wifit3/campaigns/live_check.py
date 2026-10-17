@@ -22,7 +22,8 @@ from wifit3.dot11.ie import GENERIC_RSN_IE, force_psk_akm
 from wifit3.dot11.mac import mac_header
 from wifit3.dot11.packet import EapolPacket, WepDataPacket
 from wifit3.dot11.wep.crypto import arp_request_plaintext, wep_encrypt
-from wifit3.dot11.wpa import build_eapol_m2, derive_pmk, derive_ptk, random_nonce
+from wifit3.crack import wpa_psk
+from wifit3.dot11.wpa import build_eapol_m2, derive_ptk, random_nonce
 from wifit3.dot11.wsc.assoc_ie import WPS_REQ_REGISTRAR, wps_assoc_ie
 from wifit3.models import AccessPoint, PersistedCapture, CaptureType
 
@@ -207,7 +208,7 @@ class LiveKeyVerifier:
         replay = int.from_bytes(m1_pkt.replay_counter, "big") if m1_pkt.replay_counter else 1
         logger.info("[%s] <- Received EAPOL M1 (replay %d) from %s", ssid, replay, ap.bssid)
 
-        pmk = derive_pmk(psk, ap.ssid or "")
+        pmk = wpa_psk.pmk(psk, (ap.ssid or "").encode())
         snonce = random_nonce()
         ptk = derive_ptk(pmk, str_to_mac(ap.bssid), our_mac, m1_pkt.nonce, snonce)
         kck = ptk[:16]

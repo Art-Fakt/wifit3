@@ -11,6 +11,7 @@ from wifit3.models import PersistedCapture
 class DummyTool:
     def __init__(self, name="dummy", capabilities=ToolCapability.NONE):
         self.name = name
+        self.label = name.title()
         self.capabilities = capabilities
         self.applied = []
 
@@ -48,6 +49,7 @@ def test_job_lifecycle(manager):
     assert job_id in manager.jobs
     job = manager.jobs[job_id]
     assert job.status == ToolStatus.QUEUED
+    assert job.display_name == "Dummy (test)"
     
     # First poll launches it
     manager.poll_jobs()
@@ -56,11 +58,13 @@ def test_job_lifecycle(manager):
     
     # Second poll updates status
     with patch.object(manager.tools["dummy"], "poll_status") as mock_poll:
-        mock_poll.return_value = ToolResult(status=ToolStatus.SUCCESS, value="Cracked! Key: 1234")
+        mock_poll.return_value = ToolResult(status=ToolStatus.SUCCESS, value="Cracked! Key: 1234",
+                                            percent=100.0, key="1234")
         manager.poll_jobs()
         
     assert job.status == ToolStatus.SUCCESS
     assert job.progress_msg == "Cracked! Key: 1234"
+    assert (job.percent, job.key) == (100.0, "1234")
 
 
 def _running_job(manager, actions=JobAction.STOP):
@@ -166,13 +170,11 @@ def test_crack_success_persists_key(manager, tmp_path, monkeypatch):
 
     with patch.object(manager.tools["dummy"], "poll_status") as mock_poll:
         mock_poll.return_value = ToolResult(status=ToolStatus.SUCCESS, value="Cracked!",
-                                            result_data={"key": "hunter2"})
+                                            key="hunter2")
         manager.poll_jobs()
 
     assert manager.jobs[job_id].status == ToolStatus.SUCCESS
-    written = list(tmp_path.glob("*_wpa_psk.txt"))
-    assert len(written) == 1
-    assert "hunter2" in written[0].read_text()
+    manager.vault.save_wpa_psk.assert_called_once_with("TestNet", "00:11:22:33:44:55", "hunter2")
 
 
 def test_crack_success_writes_real_essid(manager, tmp_path, monkeypatch):
@@ -191,18 +193,18 @@ def test_crack_success_writes_real_essid(manager, tmp_path, monkeypatch):
     manager.poll_jobs()
     with patch.object(manager.tools["dummy"], "poll_status") as mock_poll:
         mock_poll.return_value = ToolResult(status=ToolStatus.SUCCESS, value="Cracked!",
-                                            result_data={"key": "hunter2"})
+                                            key="hunter2")
         manager.poll_jobs()
 
     assert manager.jobs[job_id].status == ToolStatus.SUCCESS
-    written = list(tmp_path.glob("*_wpa_psk.txt"))[0].read_text()
-    assert "SSID: Cafe WiFi" in written
+    manager.vault.save_wpa_psk.assert_called_once_with("Cafe WiFi", "00:11:22:33:44:55", "hunter2")
 
 
 def test_reconcile_resolves_dead_running_job(manager):
     from wifit3.models.access_point import CaptureType
     cap = PersistedCapture(type=CaptureType.HS, timestamp=0, path="test.pcap", bssid="00:11:22:33:44:55")
     manager.vault.all_captures.return_value = [cap]
+    manager.tools["dummy"].capabilities = ToolCapability.ADOPTABLE
 
     job_id = manager.submit_job("dummy", cap, {})
     manager.poll_jobs()  # -> RUNNING, log_path set from DummyTool.launch
@@ -220,6 +222,7 @@ def test_reconcile_adopts_live_running_job(manager):
     from wifit3.models.access_point import CaptureType
     cap = PersistedCapture(type=CaptureType.HS, timestamp=0, path="test.pcap", bssid="00:11:22:33:44:55")
     manager.vault.all_captures.return_value = [cap]
+    manager.tools["dummy"].capabilities = ToolCapability.ADOPTABLE
 
     job_id = manager.submit_job("dummy", cap, {})
     manager.poll_jobs()  # -> RUNNING
@@ -234,6 +237,7 @@ def test_reconcile_isolates_a_failing_job(manager):
     from wifit3.models.access_point import CaptureType
     cap = PersistedCapture(type=CaptureType.HS, timestamp=0, path="test.pcap", bssid="00:11:22:33:44:55")
     manager.vault.all_captures.return_value = [cap]
+    manager.tools["dummy"].capabilities = ToolCapability.ADOPTABLE
     job_id = manager.submit_job("dummy", cap, {})
     manager.poll_jobs()  # -> RUNNING
 
@@ -241,6 +245,20 @@ def test_reconcile_isolates_a_failing_job(manager):
         manager.reconcile_on_startup()  # must not raise
 
     assert manager.jobs[job_id].status == ToolStatus.ERROR
+
+
+def test_reconcile_stops_a_running_job_of_a_tool_that_cannot_be_adopted(manager):
+    from wifit3.models.access_point import CaptureType
+    cap = PersistedCapture(type=CaptureType.HS, timestamp=0, path="test.pcap", bssid="00:11:22:33:44:55")
+    manager.vault.all_captures.return_value = [cap]
+    job_id = manager.submit_job("dummy", cap, {})
+    manager.poll_jobs()  # -> RUNNING
+
+    with patch.object(manager.tools["dummy"], "poll_status") as mock_poll:
+        manager.reconcile_on_startup()
+
+    assert manager.jobs[job_id].status == ToolStatus.STOPPED
+    mock_poll.assert_not_called()
 
 
 def test_singleton_tool_runs_one_at_a_time(manager):
@@ -334,6 +352,44 @@ def test_a_finished_job_loaded_from_disk_can_still_be_cleared(tmp_path, mocker):
     manager = JobManager(MagicMock())
 
     assert manager.jobs["j1"].actions == JobAction.CLEAR
+
+
+def test_poll_copies_the_tools_progress_onto_the_job(manager):
+    job_id, job = _running_job(manager)
+
+    with patch.object(manager.tools["dummy"], "poll_status") as mock_poll:
+        mock_poll.return_value = ToolResult(status=ToolStatus.RUNNING, value="Running (42.00%)",
+                                            percent=42.0, detail="rockyou.txt (2/3)")
+        manager.poll_jobs()
+
+    assert (job.percent, job.detail, job.key) == (42.0, "rockyou.txt (2/3)", None)
+
+
+def test_jobs_json_keeps_the_progress_fields(tmp_path, mocker):
+    mocker.patch("wifit3.persist.config.Config.captures_dir", str(tmp_path))
+    manager = JobManager(MagicMock())
+    manager.jobs["j1"] = JobState(job_id="j1", tool_name="cpu_crack", capture_path="a.hc22000",
+                                  status=ToolStatus.SUCCESS, progress_msg="Cracked! Key: k",
+                                  percent=100.0, key="k")
+    manager._save()
+
+    loaded = JobManager(MagicMock()).jobs["j1"]
+
+    assert (loaded.percent, loaded.detail, loaded.key) == (100.0, "", "k")
+
+
+def test_a_job_saved_before_the_progress_fields_existed_still_loads(tmp_path, mocker):
+    mocker.patch("wifit3.vault.manager.JobManager._save")
+    mocker.patch("wifit3.persist.config.Config.captures_dir", str(tmp_path))
+    (tmp_path / "jobs.json").write_text(json.dumps({"j1": {
+        "job_id": "j1", "tool_name": "hashcat", "capture_path": "a.hc22000",
+        "status": "SUCCESS", "progress_msg": "Cracked! Key: k", "display_name": "hashcat (A)",
+        "pid": None, "log_path": None, "api_id": None, "config": {}, "tool_state": {},
+    }}), encoding="utf-8")
+
+    job = JobManager(MagicMock()).jobs["j1"]
+
+    assert (job.status, job.percent, job.detail, job.key) == (ToolStatus.SUCCESS, None, "", None)
 
 
 def _wait_for_exit(tool, pid, seconds=10.0):
