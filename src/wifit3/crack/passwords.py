@@ -12,7 +12,7 @@ _MAX_SSID_PASSWORDS = 1500
 
 
 def is_valid_psk(psk: str) -> bool:
-    """8..63 bytes once UTF-8 encoded, matching how ``wpa_psk.pmk`` encodes the passphrase."""
+    """8..63 bytes once UTF-8 encoded, matching how ``derive_pmk`` encodes the passphrase."""
     return 8 <= len(psk.encode()) <= 63
 
 

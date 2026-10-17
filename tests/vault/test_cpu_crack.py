@@ -5,6 +5,7 @@ import pytest
 
 from wifit3.crack import wpa_psk
 from wifit3.crack.passwords import ssid_variants
+from wifit3.dot11 import wpa
 from wifit3.models import PersistedCapture, ToolResult, ToolStatus
 from wifit3.models.access_point import CaptureType
 from wifit3.models.jobs import JobAction, JobState
@@ -57,16 +58,16 @@ def _poll_finished(tool: CpuCrackTool, job: JobState) -> ToolResult:
 
 
 def _gate_pmk(mocker) -> tuple[threading.Event, threading.Event]:
-    """Patch ``wpa_psk.pmk`` so the worker blocks inside its first PMK until released."""
+    """Patch ``wpa.derive_pmk`` so the worker blocks inside its first PMK until released."""
     entered, release = threading.Event(), threading.Event()
-    real_pmk = wpa_psk.pmk
+    real_pmk = wpa.derive_pmk
 
     def gated(psk: str, ssid: bytes) -> bytes:
         entered.set()
         release.wait(_JOIN_SECONDS)
         return real_pmk(psk, ssid)
 
-    mocker.patch("wifit3.crack.wpa_psk.pmk", side_effect=gated)
+    mocker.patch("wifit3.dot11.wpa.derive_pmk", side_effect=gated)
     return entered, release
 
 
@@ -111,9 +112,9 @@ def test_cpu_crack_moves_on_to_the_next_wordlist(tool, tmp_path):
 def test_cpu_crack_tries_ssid_variants_before_the_wordlist(tool, tmp_path, mocker):
     ssid, psk = "MyHomeNet", "MyHomeNet123"
     mac_ap, mac_sta = bytes.fromhex("fc690c158264"), bytes.fromhex("f4747f87f9f4")
-    pmkid = wpa_psk.pmkid(wpa_psk.pmk(psk, ssid.encode()), mac_ap, mac_sta)
+    pmkid = wpa_psk.pmkid(wpa.derive_pmk(psk, ssid.encode()), mac_ap, mac_sta)
     line = f"WPA*01*{pmkid.hex()}*{mac_ap.hex()}*{mac_sta.hex()}*{ssid.encode().hex()}***"
-    pmk_spy = mocker.patch("wifit3.crack.wpa_psk.pmk", wraps=wpa_psk.pmk)
+    pmk_spy = mocker.patch("wifit3.dot11.wpa.derive_pmk", wraps=wpa.derive_pmk)
 
     job = _launch(tool, tmp_path, [line], [["wrongpass1"]])
     result = _poll_finished(tool, job)
@@ -127,9 +128,9 @@ def test_cpu_crack_tries_probed_ssid_variants_before_the_wordlist(tool, tmp_path
     probed_ssid, psk = "CafeGuest", "CafeGuest123"
     mac_ap, mac_sta = bytes.fromhex("fc690c158264"), bytes.fromhex("f4747f87f9f4")
     essid = b"hashcat-essid"
-    pmkid = wpa_psk.pmkid(wpa_psk.pmk(psk, essid), mac_ap, mac_sta)
+    pmkid = wpa_psk.pmkid(wpa.derive_pmk(psk, essid), mac_ap, mac_sta)
     line = f"WPA*01*{pmkid.hex()}*{mac_ap.hex()}*{mac_sta.hex()}*{essid.hex()}***"
-    pmk_spy = mocker.patch("wifit3.crack.wpa_psk.pmk", wraps=wpa_psk.pmk)
+    pmk_spy = mocker.patch("wifit3.dot11.wpa.derive_pmk", wraps=wpa.derive_pmk)
 
     job = _launch(tool, tmp_path, [line], [["wrongpass1"]], extra_passwords=[probed_ssid])
     result = _poll_finished(tool, job)
@@ -155,7 +156,7 @@ def test_cpu_crack_counts_and_dedupes_extra_passwords_in_the_total(tool, tmp_pat
 
 
 def test_cpu_crack_derives_one_pmk_per_password_and_essid(tool, tmp_path, mocker):
-    pmk_spy = mocker.patch("wifit3.crack.wpa_psk.pmk", wraps=wpa_psk.pmk)
+    pmk_spy = mocker.patch("wifit3.dot11.wpa.derive_pmk", wraps=wpa.derive_pmk)
 
     first = _launch(tool, tmp_path, [_HASHCAT_PMKID_LINE, _UNCRACKABLE_PMKID_LINE],
                     [["wrongpass1"]], job_id="first")

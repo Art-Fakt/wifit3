@@ -2,22 +2,23 @@
 from wifit3.crack import wpa_psk
 from wifit3.crack.hc22000_format import parse_hc22000
 from wifit3.dot11.eapol import eapol_key, set_mic, MIC_OFFSET, MIC_LEN
+from wifit3.dot11.wpa import KCK_LEN, derive_pmk, derive_ptk
 
 
 def test_pmk_ieee_annex_j_vectors():
-    assert wpa_psk.pmk("password", b"IEEE").hex() == (
+    assert derive_pmk("password", b"IEEE").hex() == (
         "f42c6fc52df0ebef9ebb4b90b38a5f902e83fe1b135a70e23aed762e9710a12e")
-    assert wpa_psk.pmk("ThisIsAPassword", b"ThisIsASSID").hex() == (
+    assert derive_pmk("ThisIsAPassword", b"ThisIsASSID").hex() == (
         "0dc0d6eb90555ed6419756b9a15ec3e3209b63df707dd508d14581f8982721af")
 
 
 def test_ptk_is_deterministic_and_nonce_order_independent():
-    p = wpa_psk.pmk("password", b"IEEE")
+    p = derive_pmk("password", b"IEEE")
     aa, spa = bytes.fromhex("112233445566"), bytes.fromhex("aabbccddeeff")
     an, sn = bytes(range(32)), bytes(range(32, 64))
-    assert wpa_psk.ptk(p, aa, spa, an, sn) == wpa_psk.ptk(p, spa, aa, sn, an)  # sorted pairs
-    assert len(wpa_psk.ptk(p, aa, spa, an, sn)) == 48
-    assert wpa_psk.kck(wpa_psk.ptk(p, aa, spa, an, sn)) == wpa_psk.ptk(p, aa, spa, an, sn)[:16]
+    assert derive_ptk(p, aa, spa, an, sn, 48) == derive_ptk(p, spa, aa, sn, an, 48)  # sorted pairs
+    assert len(derive_ptk(p, aa, spa, an, sn, 48)) == 48
+    assert derive_ptk(p, aa, spa, an, sn, KCK_LEN) == derive_ptk(p, aa, spa, an, sn, 48)[:16]
 
 
 def test_m2_mic_round_trips():
@@ -49,7 +50,7 @@ _HASHCAT_EAPOL_LINE = (
 def _matches(psk: str, line: str) -> bool:
     parsed = parse_hc22000(line)
     assert parsed is not None
-    return wpa_psk.psk_matches(wpa_psk.pmk(psk, bytes.fromhex(parsed.essid)), parsed)
+    return wpa_psk.psk_matches(derive_pmk(psk, bytes.fromhex(parsed.essid)), parsed)
 
 
 def test_psk_matches_hashcat_pmkid_example():

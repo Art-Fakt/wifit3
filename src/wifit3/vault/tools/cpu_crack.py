@@ -7,6 +7,7 @@ from typing import Dict, Iterator, Optional
 from wifit3.crack import wpa_psk
 from wifit3.crack.hc22000_format import Hc22000Line, parse_hc22000
 from wifit3.crack.passwords import read_passwords, ssid_passwords, ssid_variants
+from wifit3.dot11 import wpa
 from wifit3.models import PersistedCapture, ToolCapability, ToolResult, ToolStatus
 from wifit3.models.jobs import JobAction, JobState
 from wifit3.vault.tools.cracker import CrackerTool, WordlistQueue, expand_wordlists
@@ -105,7 +106,7 @@ class CpuCrackTool(CrackerTool[WordlistQueue]):
     @staticmethod
     def _psk_cracks(psk: str, lines_by_essid: dict[bytes, list[Hc22000Line]]) -> bool:
         for essid, lines in lines_by_essid.items():
-            pmk = wpa_psk.pmk(psk, essid)
+            pmk = wpa.derive_pmk(psk, essid)
             if any(wpa_psk.psk_matches(pmk, line) for line in lines):
                 return True
         return False
