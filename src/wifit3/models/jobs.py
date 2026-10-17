@@ -37,6 +37,7 @@ class JobState:
     percent: Optional[float] = None             # how far through the current work, once known
     detail: str = ""                            # what the work is on, e.g. "rockyou.txt (2/3)"
     key: Optional[str] = None                   # recovered PSK; None for tools that recover none
+    automatic: bool = False                     # submitted by wifit3 on capture, not by the user
     # Tool-specific tracking data (only one of these usually populated)
     pid: Optional[int] = None
     log_path: Optional[str] = None

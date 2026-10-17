@@ -6,6 +6,7 @@ import sys
 from textual import events, work
 from textual.app import App
 from textual.binding import Binding
+from textual.message import Message
 from textual.widgets import Header
 from textual.widgets._header import HeaderClock, HeaderIcon, HeaderTitle
 from typing import Optional
@@ -114,6 +115,13 @@ class WifiteApp(App):
     PathPickerModal #picker-roots Button { min-width: 0; margin-right: 1; }
     """
 
+    class JobCracked(Message):
+        """An automatic job recovered a key; posted to every screen on the stack."""
+
+        def __init__(self, job: JobState) -> None:
+            super().__init__()
+            self.job = job
+
     active_jobs: reactive[List[JobState]] = reactive([], always_update=True)
     vault_open: reactive[bool] = reactive(False)
 
@@ -200,8 +208,8 @@ class WifiteApp(App):
         self._notify_completions()
 
     def _notify_completions(self) -> None:
-        """Toast each job the first time it finishes this session; jobs already terminal when
-        the app started are recorded silently rather than re-announced."""
+        """Toast each job the first time it finishes this session (automatic jobs only on SUCCESS);
+        jobs already terminal when the app started are recorded silently."""
         terminal = (
             ToolStatus.SUCCESS, ToolStatus.FAILURE, ToolStatus.ERROR, ToolStatus.STOPPED,
         )
@@ -209,8 +217,13 @@ class WifiteApp(App):
         for job in self.active_jobs:
             prev = self._job_status.get(job.job_id)
             if job.status in terminal and prev is not None and prev not in terminal:
-                self._toast_job(job)
-                cracked = cracked or job.status == ToolStatus.SUCCESS
+                succeeded = job.status == ToolStatus.SUCCESS
+                if succeeded or not job.automatic:
+                    self._toast_job(job)
+                if succeeded and job.automatic:
+                    for screen in self.screen_stack:
+                        screen.post_message(self.JobCracked(job))
+                cracked = cracked or succeeded
             self._job_status[job.job_id] = job.status
         live = {job.job_id for job in self.active_jobs}
         self._job_status = {k: v for k, v in self._job_status.items() if k in live}

@@ -2,6 +2,8 @@
 from collections.abc import Iterator
 from pathlib import Path
 
+DEFAULT_PASSWORDS_PATH = Path(__file__).parent / "assets" / "default_passwords.txt"
+
 _SSID_SUFFIXES = ("123", "1234", "12345678", "!")
 
 

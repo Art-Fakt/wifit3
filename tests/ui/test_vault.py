@@ -5,6 +5,7 @@ import pytest
 from textual.widgets import Button, DataTable
 
 from wifit3.models import AccessPoint
+from wifit3.models.jobs import JobState, ToolStatus
 from wifit3.persist.save import SaveResult
 from wifit3.ui.app import WifiteApp
 from wifit3.ui.screens.vault_drawer import VaultDrawer
@@ -80,6 +81,45 @@ async def test_toast_on_job_completion(tmp_path):
         with patch.object(app, "notify") as notify2:
             app._notify_completions()
             notify2.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_usb_devices")
+@pytest.mark.parametrize("status", [ToolStatus.FAILURE, ToolStatus.STOPPED, ToolStatus.ERROR])
+async def test_an_automatic_job_that_finds_no_key_is_not_toasted(tmp_path, status):
+    from unittest.mock import patch
+
+    app = WifiteApp()
+    async with app.run_test():
+        job = JobState(job_id="j1", tool_name="cpu_crack", capture_path="x",
+                       status=ToolStatus.RUNNING, progress_msg="Running", automatic=True)
+        app.active_jobs = [job]
+        with patch.object(app, "notify") as notify:
+            app._notify_completions()
+            job.status = status
+            app._notify_completions()
+            notify.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_usb_devices")
+async def test_an_automatic_job_success_toasts_and_posts_job_cracked_to_the_screen(tmp_path):
+    from unittest.mock import patch
+
+    app = WifiteApp()
+    async with app.run_test():
+        job = JobState(job_id="j1", tool_name="cpu_crack", capture_path="x",
+                       status=ToolStatus.RUNNING, progress_msg="Running", automatic=True)
+        app.active_jobs = [job]
+        with patch.object(app, "notify") as notify, \
+                patch.object(app.screen, "post_message") as post_message:
+            app._notify_completions()
+            job.status = ToolStatus.SUCCESS
+            job.key = "password1"
+            app._notify_completions()
+            assert "PSK: password1" in notify.call_args.args[0]
+            posted = post_message.call_args.args[0]
+            assert isinstance(posted, WifiteApp.JobCracked) and posted.job is job
 
 
 @pytest.mark.asyncio
