@@ -4,6 +4,8 @@ The autouse _captures_to_tmp fixture points Config.captures_dir at tmp_path, and
 import pytest
 from textual.widgets import Button, DataTable
 
+from wifit3.models import AccessPoint
+from wifit3.persist.save import SaveResult
 from wifit3.ui.app import WifiteApp
 from wifit3.ui.screens.vault_drawer import VaultDrawer
 from wifit3.ui.screens.vault_item import ConfirmModal, _CapturePanel
@@ -81,6 +83,24 @@ async def test_toast_on_job_completion(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("no_usb_devices")
+async def test_vault_keeps_emoji_named_mac_octets_literal(tmp_path):
+    _write(tmp_path, "HomeNet_aa-cd-11-22-33-44_1000_wep_key.txt", _WEP_TXT)
+    _write(tmp_path, "HomeNet_bb-cc-11-22-33-44_1000_wep_key.txt", _WEP_TXT)
+    app = WifiteApp()
+    async with app.run_test() as pilot:
+        view = await _open_vault(app)
+        await pilot.pause()
+        cell = view.query_one("#vault-aps", DataTable).get_row("aa:cd:11:22:33:44")[0]
+
+        assert cell.plain == "HomeNet ✓WEP aa:cd:11:22:33:44"
+        assert "💿" not in cell.plain
+        title = view.query_one("VaultItemView")._border_title
+        assert title.plain == " HomeNet (aa:cd:11:22:33:44) "
+        assert all(span.end <= title.plain.index("aa:cd") for span in title.spans)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_usb_devices")
 async def test_open_vault_focuses_ap_list(tmp_path):
     _write(tmp_path, "HomeNet_aa-bb-cc-dd-ee-ff_1000_wep_key.txt", _WEP_TXT)
     app = WifiteApp()
@@ -92,7 +112,32 @@ async def test_open_vault_focuses_ap_list(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("no_usb_devices")
-async def test_preselected_bssid_restored_after_reload(tmp_path):
+async def test_open_vault_updates_when_handshake_is_saved(tmp_path, mocker):
+    app = WifiteApp()
+    async with app.run_test() as pilot:
+        view = await _open_vault(app)
+        await pilot.pause()
+        table = view.query_one("#vault-aps", DataTable)
+        assert table.row_count == 0
+
+        capture_path = tmp_path / "HomeNet_aa-bb-cc-dd-ee-ff.hc22000"
+        mocker.patch(
+            "wifit3.persist.vault.save.save_handshake",
+            return_value=SaveResult(capture_path, was_new=True),
+        )
+        app.vault.save_handshake(
+            AccessPoint(bssid="aa:bb:cc:dd:ee:ff", ssid="HomeNet"),
+            "11:22:33:44:55:66",
+        )
+
+        await pilot.pause()
+        assert table.row_count == 1
+        assert "✓HS" in str(table.get_row_at(0)[0])
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_usb_devices")
+async def test_selection_restored_after_reload(tmp_path):
     _write(tmp_path, "Alpha_aa-bb-cc-dd-ee-ff_1000_wep_key.txt",
            "SSID: Alpha\nBSSID: aa:bb:cc:dd:ee:ff\nWEP key (hex): 6162\n")
     _write(tmp_path, "Bravo_11-22-33-44-55-66_1000_wep_key.txt",
