@@ -1,6 +1,7 @@
 """WPA passphrase tests: length bounds, SSID variants, wordlist streaming."""
 from pathlib import Path
 
+from wifit3.crack import passwords
 from wifit3.crack.passwords import is_valid_psk, read_passwords, ssid_variants
 
 
@@ -32,3 +33,15 @@ def test_read_passwords_strips_newlines_and_skips_invalid(tmp_path: Path):
     wordlist = tmp_path / "words.txt"
     wordlist.write_bytes(b"password1\r\nshort\nhashcat!\n\xff\xfevalidpass\n" + b"x" * 64 + b"\n")
     assert list(read_passwords(wordlist)) == ["password1", "hashcat!", "validpass"]
+
+
+def test_ssid_passwords_tries_every_ssid_before_any_variant():
+    assert passwords.ssid_passwords(["HomeNet1", "CafeWifi"])[:2] == ["HomeNet1", "CafeWifi"]
+    assert "homenet1123" in passwords.ssid_passwords(["HomeNet1"])
+
+
+def test_ssid_passwords_stops_at_the_cap():
+    ssids = [f"network{i:05d}" for i in range(2000)]
+    result = passwords.ssid_passwords(ssids)
+    assert len(result) == passwords._MAX_SSID_PASSWORDS
+    assert result == ssids[:passwords._MAX_SSID_PASSWORDS]

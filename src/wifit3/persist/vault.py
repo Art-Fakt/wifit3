@@ -9,7 +9,7 @@ import sys
 import time
 import zipfile
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Callable, Dict, Iterable, List, Optional
 
 from wifit3.crack.hc22000_format import Hc22000Line
 from wifit3.crack.passwords import DEFAULT_PASSWORDS_PATH
@@ -71,6 +71,7 @@ class Vault:
     def __init__(self) -> None:
         self._index: Dict[str, List[PersistedCapture]] = {}
         self._change_listeners: list[Callable[[], None]] = []
+        self._probed_ssids_source: Callable[[], Iterable[str]] = lambda: ()
         self.revision = 0   # bumped on every index change; a cache key for readers
         self.errors: list[str] = []                       # surfaced as toasts by the app on mount
         try:
@@ -94,6 +95,10 @@ class Vault:
 
     def subscribe(self, listener: Callable[[], None]) -> None:
         self._change_listeners.append(listener)
+
+    def set_probed_ssids_source(self, source: Callable[[], Iterable[str]]) -> None:
+        """Where auto-crack reads this session's probed SSIDs, tried as passwords before the wordlist."""
+        self._probed_ssids_source = source
 
     def _notify_changed(self) -> None:
         self.revision += 1
@@ -222,7 +227,9 @@ class Vault:
             return
         if crosses_auto_crack_threshold(before, self._hc_lines(ap)):
             self.manager.submit_job(CpuCrackTool.name, capture,
-                                    {"wordlists": [str(DEFAULT_PASSWORDS_PATH)]}, automatic=True)
+                                    {"wordlists": [str(DEFAULT_PASSWORDS_PATH)],
+                                     "extra_passwords": sorted(self._probed_ssids_source())},
+                                    automatic=True)
 
     def save_wep_key(self, ap: "AccessPoint", key: bytes) -> Optional[SaveResult]:
         result = save.save_wep_key(ap, key)

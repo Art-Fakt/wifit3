@@ -353,8 +353,9 @@ def test_threshold_prior_authorized_line_never_crosses():
 _CLIENT = "11:22:33:44:55:66"
 
 
-def _auto_crack_call(capture) -> tuple:
-    return (("cpu_crack", capture, {"wordlists": [str(DEFAULT_PASSWORDS_PATH)]}),
+def _auto_crack_call(capture, extra_passwords: list[str] | None = None) -> tuple:
+    return (("cpu_crack", capture, {"wordlists": [str(DEFAULT_PASSWORDS_PATH)],
+                                    "extra_passwords": extra_passwords or []}),
             {"automatic": True})
 
 
@@ -374,6 +375,19 @@ def test_save_submits_cpu_crack_once_per_threshold(tmp_path, mocker):
     v.save_pmkid(ap, _CLIENT)
     assert v.manager.submit_job.call_count == 2
     assert v.manager.submit_job.call_args == _auto_crack_call(v.persisted(ap.bssid)[0])
+
+
+def test_auto_crack_snapshots_probed_ssids_sorted(tmp_path, mocker):
+    v = Vault()
+    v.manager = mocker.Mock()
+    probed_ssids = {"Zeta_SSID", "Alpha_SSID"}
+    v.set_probed_ssids_source(lambda: probed_ssids)
+
+    v.save_handshake(_ap_with_hs(), _CLIENT)
+    probed_ssids.add("Later_SSID")
+
+    capture = v.persisted(_ap_with_hs().bssid)[0]
+    assert v.manager.submit_job.call_args == _auto_crack_call(capture, ["Alpha_SSID", "Zeta_SSID"])
 
 
 def test_save_does_not_submit_when_auto_crack_is_off(tmp_path, mocker, monkeypatch):

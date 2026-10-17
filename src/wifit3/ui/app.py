@@ -14,7 +14,7 @@ from typing import Optional
 from wifit3 import __version__
 from wifit3.chips import log_trace
 from textual.reactive import reactive
-from typing import List
+from typing import List, Set
 from wifit3.models.jobs import JobState, ToolStatus
 from wifit3.persist.config import Config, ConfigError
 from wifit3.persist.vault import Vault
@@ -142,10 +142,14 @@ class WifiteApp(App):
         self.target_ap: Optional[AccessPoint] = None
         self.vault = Vault()
         self.vault.subscribe(self._refresh_vault_table)
+        self.vault.set_probed_ssids_source(self._probed_ssids)
         self._job_status: dict[str, ToolStatus] = {}
         self.pbc_enabled: bool = Config.wps_auto_pbc
         register_app_themes(self)
         self.theme = Config.theme
+
+    def _probed_ssids(self) -> Set[str]:
+        return self.array.probed_ssids if self.array is not None else set()
 
     def on_text_selected(self, event: events.TextSelected) -> None:
         selected = self.screen.get_selected_text()

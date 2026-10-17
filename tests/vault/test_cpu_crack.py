@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from wifit3.crack import wpa_psk
+from wifit3.crack.passwords import ssid_variants
 from wifit3.models import PersistedCapture, ToolResult, ToolStatus
 from wifit3.models.access_point import CaptureType
 from wifit3.models.jobs import JobAction, JobState
@@ -30,11 +31,15 @@ def _write(path: Path, lines: list[str]) -> str:
 
 
 def _launch(tool: CpuCrackTool, tmp_path: Path, hashlines: list[str],
-            wordlists: list[list[str]], job_id: str = "job") -> JobState:
+            wordlists: list[list[str]], job_id: str = "job",
+            extra_passwords: list[str] | None = None) -> JobState:
     capture_path = _write(tmp_path / f"{job_id}.hc22000", hashlines)
     paths = [_write(tmp_path / f"{job_id}_words{i}.txt", words) for i, words in enumerate(wordlists)]
+    config: dict = {"wordlists": paths}
+    if extra_passwords is not None:
+        config["extra_passwords"] = extra_passwords
     job = JobState(job_id=job_id, tool_name="cpu_crack", capture_path=capture_path,
-                   status=ToolStatus.RUNNING, progress_msg="", config={"wordlists": paths})
+                   status=ToolStatus.RUNNING, progress_msg="", config=config)
     tool.launch(job, PersistedCapture(type=CaptureType.PMKID, timestamp=0, path=capture_path,
                                       bssid="fc:69:0c:15:82:64"))
     return job
@@ -116,6 +121,37 @@ def test_cpu_crack_tries_ssid_variants_before_the_wordlist(tool, tmp_path, mocke
     assert result.value == f"Cracked! Key: {psk}"
     assert pmk_spy.call_args_list[0].args == (ssid, ssid.encode())
     assert "wrongpass1" not in [call.args[0] for call in pmk_spy.call_args_list]
+
+
+def test_cpu_crack_tries_probed_ssid_variants_before_the_wordlist(tool, tmp_path, mocker):
+    probed_ssid, psk = "CafeGuest", "CafeGuest123"
+    mac_ap, mac_sta = bytes.fromhex("fc690c158264"), bytes.fromhex("f4747f87f9f4")
+    essid = b"hashcat-essid"
+    pmkid = wpa_psk.pmkid(wpa_psk.pmk(psk, essid), mac_ap, mac_sta)
+    line = f"WPA*01*{pmkid.hex()}*{mac_ap.hex()}*{mac_sta.hex()}*{essid.hex()}***"
+    pmk_spy = mocker.patch("wifit3.crack.wpa_psk.pmk", wraps=wpa_psk.pmk)
+
+    job = _launch(tool, tmp_path, [line], [["wrongpass1"]], extra_passwords=[probed_ssid])
+    result = _poll_finished(tool, job)
+
+    assert result.value == f"Cracked! Key: {psk}"
+    tried = [call.args[0] for call in pmk_spy.call_args_list]
+    expected = ssid_variants("hashcat-essid") + ssid_variants(probed_ssid)
+    assert tried == expected[:expected.index(psk) + 1]
+
+
+def test_cpu_crack_counts_and_dedupes_extra_passwords_in_the_total(tool, tmp_path, mocker):
+    entered, release = _gate_pmk(mocker)
+    job = _launch(tool, tmp_path, [_UNCRACKABLE_PMKID_LINE], [["CafeGuest", "wrongpass1"]],
+                  extra_passwords=["CafeGuest", "hashcat-essid"])
+    assert entered.wait(_JOIN_SECONDS)
+
+    run = tool._runs[job.job_id]
+    assert run.passwords_total == len(list(tool._passwords(run)))
+    assert list(tool._passwords(run)).count("CafeGuest") == 1
+    assert list(tool._passwords(run))[-1] == "wrongpass1"
+    release.set()
+    _join(tool, job)
 
 
 def test_cpu_crack_derives_one_pmk_per_password_and_essid(tool, tmp_path, mocker):
