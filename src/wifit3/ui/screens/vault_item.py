@@ -17,7 +17,6 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalGroup
 from textual.content import Content
 from textual.events import Event
-from textual.message import Message
 from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widgets import Button, Label, Select
@@ -282,7 +281,6 @@ class _CapturePanel(VerticalGroup):
                 self.notify(f"Could not remove {Path(cap.path).name}: {exc}", severity="error")
                 return
             self.notify(f"Removed {Path(cap.path).name}")
-            self.post_message(VaultItemView.CapturesChanged())
 
         self.app.push_screen(ConfirmModal(f"Delete [bold]{escape(Path(cap.path).name)}[/]?"), after)
         
@@ -333,9 +331,6 @@ class _CapturePanel(VerticalGroup):
 
 
 class VaultItemView(Vertical):
-    class CapturesChanged(Message):
-        """A capture was deleted; the parent should refresh."""
-
     DEFAULT_CSS = """
     VaultItemView {
         width: 1fr;

@@ -117,10 +117,6 @@ class VaultDrawer(ModalScreen):
         if event.row_key is not None and event.row_key.value is not None:
             self._load_widget(event.row_key.value)
 
-    @on(VaultItemView.CapturesChanged)
-    def _captures_changed(self) -> None:
-        self.query_one("#vault-table", VaultTable).reload_table()
-
     def action_export_zip(self) -> None:
         try:
             out = self.app.vault.zip_captures(self.app.vault.all_captures())

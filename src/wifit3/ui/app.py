@@ -217,7 +217,6 @@ class WifiteApp(App):
         terminal = (
             ToolStatus.SUCCESS, ToolStatus.FAILURE, ToolStatus.ERROR, ToolStatus.STOPPED,
         )
-        cracked = False
         for job in self.active_jobs:
             prev = self._job_status.get(job.job_id)
             if job.status in terminal and prev is not None and prev not in terminal:
@@ -227,13 +226,9 @@ class WifiteApp(App):
                 if succeeded and job.automatic:
                     for screen in self.screen_stack:
                         screen.post_message(self.JobCracked(job))
-                cracked = cracked or succeeded
             self._job_status[job.job_id] = job.status
         live = {job.job_id for job in self.active_jobs}
         self._job_status = {k: v for k, v in self._job_status.items() if k in live}
-        if cracked:
-            self._refresh_vault_table()
-
 
     def _refresh_vault_table(self) -> None:
         """Reload the vault table if its drawer is open."""
