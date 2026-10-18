@@ -171,8 +171,10 @@ class EvilTwinCampaign(Campaign):
         if self.fakeap is None:
             return
         try:
-            await self.fakeap.stop()      # stop the WPA2 beacon + responder first
-            await self._csa_return()      # then announce the switch-back, uninterleaved
+            try:
+                await self.fakeap.stop()  # stop the WPA2 beacon + responder first
+            finally:
+                await self._csa_return()  # then announce the switch-back, uninterleaved
         finally:
             if self.same_bssid:
                 self.array.stop_ignoring_stray_beacons(self.twin_bssid)

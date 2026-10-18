@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import enum
+import logging
 import os
 import struct
 import time
@@ -19,6 +20,8 @@ from typing import Callable, Dict, Optional
 from wifit3.dot11.ap import auth_resp, assoc_resp, eapol_m1
 from wifit3.dot11.mac import mac_to_str
 from wifit3.dot11.probe import probe_resp
+
+logger = logging.getLogger(__name__)
 
 _BEACON_PERIOD_S = 100 * 1024 / 1_000_000       # 100 TU
 
@@ -107,8 +110,15 @@ class FakeAP:
             raise error
 
     async def _beacon_loop(self) -> None:
+        failing = False
         while self._running:
-            await self.iface.send_no_wait(self._restamp(self.twin_beacon))
+            try:
+                await self.iface.send_no_wait(self._restamp(self.twin_beacon))
+                failing = False
+            except Exception:
+                if not failing:            # one log per run of failures, not 10/s
+                    logger.exception("FakeAP beacon send failed; still beaconing")
+                failing = True
             await asyncio.sleep(_BEACON_PERIOD_S)
 
     @staticmethod
@@ -123,7 +133,8 @@ class FakeAP:
             return
         client = raw[10:16]
         if pkt.type == "eapol":
-            self._on_m2(pkt, client)
+            if raw[4:10] == self.bssid:                 # an M2 to us, not the real AP on this channel
+                self._on_m2(pkt, client)
             return
         if pkt.type_id != 0:
             return

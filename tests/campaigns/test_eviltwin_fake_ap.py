@@ -109,6 +109,14 @@ async def test_m2_marks_client_once():
     assert fap.stats.clients["02:aa:bb:cc:dd:ee"].phase == ClientPhase.GOT_M2
 
 
+async def test_m2_to_another_bssid_ignored():
+    fap = _fakeap()
+    other_ap = bytes.fromhex("020000000099")
+    fap.on_rx(_parse(_m2(other_ap, _CLIENT, bytes(range(32, 64)))))   # a real AP's handshake on our channel
+    assert fap.stats.m2 == 0
+    assert not fap.stats.clients
+
+
 async def test_auth_to_a_different_bssid_ignored():
     fap = _fakeap()
     fap.on_rx(_parse(auth_req(_OTHER, _CLIENT)))
