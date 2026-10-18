@@ -197,10 +197,13 @@ class ScannerView(Screen):
         if not array:
             return
         self._evict_expired_aps()
+        # Under an opaque screen (Focus) the table is hidden: keep draining capture events, skip the
+        # rows. Textual's is_current is True here, and every table repaint would repaint Focus too.
+        visible = self.is_active or self.app.screen.styles.background.a < 1
 
         # Pre-compute per-AP client counts to avoid O(N×M) inside the AP loop below.
         client_counts: Dict[str, int] = {}
-        for c in array.clients.values():
+        for c in array.clients.values() if visible else ():
             if c.bssid and c.mac not in array.forged_macs:
                 client_counts[c.bssid] = client_counts.get(c.bssid, 0) + 1
 
@@ -218,10 +221,13 @@ class ScannerView(Screen):
                 continue
 
             self.ap_cache[ap.bssid] = ap
-            rows.append(self._row_for(ap, now, client_counts.get(ap.bssid, 0), sibling_ssid))
+            if visible:
+                rows.append(self._row_for(ap, now, client_counts.get(ap.bssid, 0), sibling_ssid))
             self._log_decloak(ap)
             self._drain_capture_events(ap, array.forged_macs)
 
+        if not visible:
+            return
         table = self.query_one("#ap-table", APTable)
         table.set_rows(rows)
         if self._should_sort():
