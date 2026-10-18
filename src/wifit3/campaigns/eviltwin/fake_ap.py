@@ -27,6 +27,10 @@ logger = logging.getLogger(__name__)
 _BEACON_PERIOD_S = 100 * 1024 / 1_000_000       # 100 TU
 _BEACON_BODY = 36                               # 24B MAC header + timestamp, interval, capability
 _ELEMID_TIM = 5                                 # beacon-only: a probe response omits it
+_SAE_AKMS = frozenset({8, 9, 24, 25})           # SAE / FT-SAE / SAE-EXT-KEY / FT-SAE-EXT-KEY
+_STATUS_INVALID_PMKID = 53
+_STATUS_NOT_SUPPORTED_AUTH_ALG = 13
+_AUTH_ALG_SAE = 3
 
 
 class ClientPhase(enum.IntEnum):
@@ -52,6 +56,8 @@ class FakeApStats:
     assoc: int = 0
     m2: int = 0
     strays: int = 0                                 # deauths sent for data from unassociated STAs
+    cached_key_rejects: int = 0                     # SAE assoc-reqs refused with status 53
+    sae_auth_rejects: int = 0                       # SAE auths refused with status 13
     clients: Dict[str, ClientProgress] = field(default_factory=dict)
 
 
@@ -160,9 +166,9 @@ class FakeAP:
         elif raw[4:10] != self.bssid:                   # auth/assoc must be addressed to us
             return
         elif subtype == 0x0B:                           # authentication
-            self._on_auth(client)
+            self._on_auth(raw, client)
         elif subtype in (0x00, 0x02):                   # (re)association request
-            self._on_assoc(client)
+            self._on_assoc(pkt, client)
 
     def _associated(self, client: bytes) -> bool:
         rec = self.stats.clients.get(mac_to_str(client))
@@ -184,14 +190,25 @@ class FakeAP:
             return
         self._tx(self._restamp(self._probe_resp[:4] + client + self._probe_resp[10:]))
 
-    def _on_auth(self, client: bytes) -> None:
+    def _on_auth(self, raw: bytes, client: bytes) -> None:
         self.stats.auth += 1
+        if int.from_bytes(raw[24:26], "little") == _AUTH_ALG_SAE:
+            # Refuse SAE as an AP without it does (hostapd: sequence 2, status 13).
+            self.stats.sae_auth_rejects += 1
+            self._tx(auth_resp(self.bssid, client, algorithm=_AUTH_ALG_SAE,
+                               status=_STATUS_NOT_SUPPORTED_AUTH_ALG))
+            return
         self._advance(mac_to_str(client), ClientPhase.AUTHED)
         self._tx(auth_resp(self.bssid, client))
 
-    def _on_assoc(self, client: bytes) -> None:
+    def _on_assoc(self, pkt, client: bytes) -> None:
         self.stats.assoc += 1
         cs = mac_to_str(client)
+        if getattr(pkt, "assoc_akm", None) in _SAE_AKMS:
+            # SAE after our open auth means a cached SAE key we don't hold: refuse it, as hostapd does.
+            self.stats.cached_key_rejects += 1
+            self._tx(assoc_resp(self.bssid, client, channel=self.channel, status=_STATUS_INVALID_PMKID))
+            return
         self._advance(cs, ClientPhase.ASSOCED)
         self._tx(assoc_resp(self.bssid, client, channel=self.channel))
         anonce = os.urandom(32)

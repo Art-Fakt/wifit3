@@ -6,6 +6,7 @@ import pytest
 from wifit3.campaigns.eviltwin import FakeAP, ClientPhase
 from wifit3.dot11.parser import WlanFrameParser
 from wifit3.dot11.probe import probe_req
+from wifit3.dot11.ap import auth_resp
 from wifit3.dot11.auth_assoc import auth_req, assoc_req
 from wifit3.dot11.eapol import eapol_key, data_header, LLC_SNAP_EAPOL
 from wifit3.dot11.ie import GENERIC_RSN_IE
@@ -111,6 +112,30 @@ async def test_auth_assoc_drives_m1_and_progress():
     assert len(m1s) == 1 and m1s[0][:2] == b"\x08\x02"          # M1 seeded before injection
     assert m1s[0] in fap.iface.sent                             # and also injected
     assert any(f[:2] == b"\x10\x00" for f in fap.iface.sent)    # assoc resp went out
+
+
+async def test_cached_sae_key_assoc_is_refused_with_status_53():
+    fap = _fakeap()
+    sae_rsn_with_pmkid = bytes.fromhex("30260100000fac040100000fac040100000fac08c0000100") + bytes(16)
+    fap.on_rx(_parse(auth_req(_BSSID, _CLIENT)))
+    fap.on_rx(_parse(assoc_req(_BSSID, _CLIENT, _SSID, sae_rsn_with_pmkid)))
+    await _flush()
+    assert fap.stats.cached_key_rejects == 1
+    resp = [f for f in fap.iface.sent if f[:2] == b"\x10\x00"]
+    assert len(resp) == 1 and resp[0][26:28] == (53).to_bytes(2, "little")
+    assert not any(f[:2] == b"\x08\x02" for f in fap.iface.sent)  # no M1
+    assert fap.stats.clients["02:aa:bb:cc:dd:ee"].phase == ClientPhase.AUTHED
+
+
+async def test_sae_auth_is_refused_with_status_13():
+    fap = _fakeap()
+    sae_commit = auth_req(_BSSID, _CLIENT)[:24] + b"\x03\x00\x01\x00\x7e\x00" + b"\x13\x00" + bytes(96)
+    fap.on_rx(_parse(sae_commit))
+    await _flush()
+    assert fap.stats.sae_auth_rejects == 1
+    assert fap.iface.sent == [auth_resp(_BSSID, _CLIENT, algorithm=3, status=13)]
+    assert fap.iface.sent[0][24:30] == b"\x03\x00\x02\x00\x0d\x00"   # SAE, seq 2, status 13
+    assert "02:aa:bb:cc:dd:ee" not in fap.stats.clients
 
 
 async def test_m2_marks_client_once():

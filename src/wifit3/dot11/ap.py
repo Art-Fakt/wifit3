@@ -29,14 +29,14 @@ def _resp_header(fc: bytes, bssid: bytes, client: bytes) -> bytes:
     return mac_header(fc, client, bssid, bssid)
 
 
-def auth_resp(bssid: bytes, client: bytes) -> bytes:
-    """Open-System Authentication response: algorithm 0, sequence 2, status 0."""
-    return _resp_header(b"\xb0\x00", bssid, client) + b"\x00\x00\x02\x00\x00\x00"
+def auth_resp(bssid: bytes, client: bytes, algorithm: int = 0, status: int = 0) -> bytes:
+    """Authentication response: ``algorithm``, sequence 2, ``status``."""
+    return _resp_header(b"\xb0\x00", bssid, client) + struct.pack("<HHH", algorithm, 2, status)
 
 
-def assoc_resp(bssid: bytes, client: bytes, aid: int = 1, channel: int = 1) -> bytes:
-    """Association Response: ESS+Privacy capability, status 0 (success), AID, band-aware rates."""
-    body = (struct.pack("<H", _CAP_ESS_PRIVACY) + b"\x00\x00" + struct.pack("<H", aid)
+def assoc_resp(bssid: bytes, client: bytes, aid: int = 1, channel: int = 1, status: int = 0) -> bytes:
+    """Association Response: ESS+Privacy capability, ``status``, AID, band-aware rates."""
+    body = (struct.pack("<H", _CAP_ESS_PRIVACY) + struct.pack("<H", status) + struct.pack("<H", aid)
             + rates_ie(channel) + ext_rates_ie(channel))
     return _resp_header(b"\x10\x00", bssid, client) + body
 
