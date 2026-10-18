@@ -25,7 +25,7 @@ def test_recovered_wps_psk_shows_in_status():
     # We pass None for vault as it's unused in this branch of status_headlines
     lines = fm.status_headlines(ap, array, vault=Vault())
     status_text = "".join(lines)
-    assert "PSK recovered" in status_text
+    assert "PSK: hunter2" in status_text
 
 
 def test_finish_wps_preserves_empty_pin():
