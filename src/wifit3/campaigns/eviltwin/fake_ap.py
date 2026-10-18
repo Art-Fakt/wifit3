@@ -19,11 +19,13 @@ from typing import Callable, Dict, Optional
 
 from wifit3.dot11.ap import auth_resp, assoc_resp, eapol_m1
 from wifit3.dot11.mac import mac_to_str
-from wifit3.dot11.probe import probe_resp
+from wifit3.dot11.ie import iter_information_elements
 
 logger = logging.getLogger(__name__)
 
 _BEACON_PERIOD_S = 100 * 1024 / 1_000_000       # 100 TU
+_BEACON_BODY = 36                               # 24B MAC header + timestamp, interval, capability
+_ELEMID_TIM = 5                                 # beacon-only: a probe response omits it
 
 
 class ClientPhase(enum.IntEnum):
@@ -62,7 +64,7 @@ class FakeAP:
         self.rx_source = rx_source
         self.record_m1 = record_m1 or (lambda _frame: None)
         self.stats = FakeApStats()
-        self._probe_resp = probe_resp(bssid, ssid, channel)
+        self._probe_resp = self._probe_resp_from(twin_beacon)
         self._running = False
         self._fake_mac_armed = False
         self._rx_registered = False
@@ -122,6 +124,14 @@ class FakeAP:
             await asyncio.sleep(_BEACON_PERIOD_S)
 
     @staticmethod
+    def _probe_resp_from(beacon: bytes) -> bytes:
+        """The twin beacon as a probe response, so both advertise the same network: same fixed
+        fields and elements minus the TIM. Addr1 is zeroed; the client is spliced in per probe."""
+        elements = b"".join(raw for tag, _body, raw in iter_information_elements(beacon, _BEACON_BODY)
+                            if tag != _ELEMID_TIM)
+        return b"\x50\x00" + beacon[2:4] + b"\x00" * 6 + beacon[10:_BEACON_BODY] + elements
+
+    @staticmethod
     def _restamp(beacon: bytes) -> bytes:
         return beacon[:24] + struct.pack("<Q", int(time.time() * 1_000_000)) + beacon[32:]
 
@@ -156,7 +166,7 @@ class FakeAP:
             self.stats.probes_direct += 1
         else:
             return
-        self._tx(self._probe_resp[:4] + client + self._probe_resp[10:])
+        self._tx(self._restamp(self._probe_resp[:4] + client + self._probe_resp[10:]))
 
     def _on_auth(self, client: bytes) -> None:
         self.stats.auth += 1

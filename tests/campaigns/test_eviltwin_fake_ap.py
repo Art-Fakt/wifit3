@@ -65,6 +65,21 @@ async def test_wildcard_probe_answered_and_counted():
     assert resp[:2] == b"\x50\x00" and resp[4:10] == _CLIENT     # probe resp addressed to the client
 
 
+async def test_probe_resp_advertises_the_beacon_minus_tim():
+    head = b"\x80\x00\x00\x00" + b"\xff" * 6 + _BSSID + _BSSID + b"\x00\x00"
+    fixed = bytes(8) + b"\x64\x00" + b"\x11\x04"                 # TSF, 100 TU, capability
+    ssid_ie, tim_ie = b"\x00\x07" + _SSID.encode(), b"\x05\x04\x00\x01\x00\x00"
+    beacon = head + fixed + ssid_ie + tim_ie + GENERIC_RSN_IE
+    fap = FakeAP(FakeIface(), _BSSID, _SSID, 1, twin_beacon=beacon)
+    fap.on_rx(_parse(probe_req(_BSSID, _CLIENT, _SSID)))
+    await _flush()
+    resp = fap.iface.sent[0]
+    assert resp[:2] == b"\x50\x00" and resp[4:10] == _CLIENT and resp[10:22] == _BSSID * 2
+    assert resp[32:36] == fixed[8:]                               # same interval + capability
+    assert resp[36:] == ssid_ie + GENERIC_RSN_IE                  # same elements, TIM dropped
+    assert resp[24:32] != bytes(8)                                # TSF stamped at send
+
+
 async def test_directed_probe_for_us_counted():
     fap = _fakeap()
     fap.on_rx(_parse(probe_req(_BSSID, _CLIENT, _SSID)))
