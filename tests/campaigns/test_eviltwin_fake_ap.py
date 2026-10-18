@@ -124,6 +124,30 @@ async def test_m2_marks_client_once():
     assert fap.stats.clients["02:aa:bb:cc:dd:ee"].phase == ClientPhase.GOT_M2
 
 
+async def test_every_stray_data_frame_gets_a_deauth():
+    fap = _fakeap()
+    data = data_header(to_ds=True, bssid=_BSSID, client=_CLIENT) + b"\x00\x00payload"
+    fap.on_rx(_parse(data))
+    fap.on_rx(_parse(data))                                     # a second stray data frame
+    await _flush()
+    assert fap.stats.strays == 2
+    assert len(fap.iface.sent) == 2
+    sent = fap.iface.sent[0]
+    assert sent[0] == 0xC0 and sent[4:10] == _CLIENT            # deauth AP->client
+    assert sent[10:16] == _BSSID and sent[24] == 7              # from the twin, reason 7
+
+
+async def test_data_from_an_associated_client_is_not_deauthed():
+    fap = _fakeap()
+    fap.on_rx(_parse(auth_req(_BSSID, _CLIENT)))
+    fap.on_rx(_parse(assoc_req(_BSSID, _CLIENT, _SSID, GENERIC_RSN_IE)))
+    await _flush()
+    fap.iface.sent.clear()
+    fap.on_rx(_parse(data_header(to_ds=True, bssid=_BSSID, client=_CLIENT) + b"\x00\x00x"))
+    await _flush()
+    assert fap.stats.strays == 0 and not fap.iface.sent
+
+
 async def test_m2_to_another_bssid_ignored():
     fap = _fakeap()
     other_ap = bytes.fromhex("020000000099")

@@ -17,6 +17,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Dict, Optional
 
+from wifit3.dot11 import build_deauth
 from wifit3.dot11.ap import auth_resp, assoc_resp, eapol_m1
 from wifit3.dot11.mac import mac_to_str
 from wifit3.dot11.ie import iter_information_elements
@@ -50,6 +51,7 @@ class FakeApStats:
     auth: int = 0
     assoc: int = 0
     m2: int = 0
+    strays: int = 0                                 # deauths sent for data from unassociated STAs
     clients: Dict[str, ClientProgress] = field(default_factory=dict)
 
 
@@ -146,6 +148,10 @@ class FakeAP:
             if raw[4:10] == self.bssid:                 # an M2 to us, not the real AP on this channel
                 self._on_m2(pkt, client)
             return
+        if pkt.type_id == 2:                            # a data frame to us from a STA not associated
+            if pkt.to_ds and raw[4:10] == self.bssid and not self._associated(client):
+                self._on_stray_data(client)
+            return
         if pkt.type_id != 0:
             return
         subtype = pkt.subtype_id
@@ -157,6 +163,16 @@ class FakeAP:
             self._on_auth(client)
         elif subtype in (0x00, 0x02):                   # (re)association request
             self._on_assoc(client)
+
+    def _associated(self, client: bytes) -> bool:
+        rec = self.stats.clients.get(mac_to_str(client))
+        return rec is not None and rec.phase >= ClientPhase.ASSOCED
+
+    def _on_stray_data(self, client: bytes) -> None:
+        """Deauth every data frame from a STA not associated with us, reason 7 (class-3 frame from a
+        nonassociated STA), as hostapd does."""
+        self.stats.strays += 1
+        self._tx(build_deauth(client, self.bssid, self.bssid, 7))
 
     def _on_probe(self, pkt, client: bytes) -> None:
         ssid = getattr(pkt, "ssid", None)
