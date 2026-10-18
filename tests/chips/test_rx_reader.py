@@ -2,6 +2,7 @@
 hand-off (read_once on the thread -> dispatch on the loop) and the
 consecutive-error give-up. Driver-specific decode is tested per driver."""
 import asyncio
+import threading
 
 import pytest
 import usb.core
@@ -148,19 +149,26 @@ def test_pause_on_stopped_reader_returns_immediately():
 
 
 @pytest.mark.asyncio
-async def test_reader_batches_by_size_and_preserves_order(monkeypatch):
-    monkeypatch.setattr(rx_reader, "MAX_BATCH_SIZE", 3)
-    monkeypatch.setattr(rx_reader, "MAX_BATCH_WAIT", 999)
+async def test_reader_dispatches_at_once_when_idle_and_batches_while_loop_busy():
     loop = asyncio.get_running_loop()
     seq = [b"A", b"B", b"C"]
+    b_and_c_read = threading.Event()
     event = asyncio.Event()
     batches = []
     dispatched = []
 
     def read_once():
-        return seq.pop(0) if seq else None
+        buf = seq.pop(0) if seq else None
+        if not seq:
+            b_and_c_read.set()
+        return buf
 
-    r = RxReaderThread(loop, read_once, dispatched.append, name="batch")
+    def on_dispatch(buf):
+        dispatched.append(buf)
+        if buf == b"A":
+            b_and_c_read.wait(1.0)            # hold the loop on A while the reader takes B, C
+
+    r = RxReaderThread(loop, read_once, on_dispatch, name="batch")
     orig = r._dispatch_batch
 
     def spy(batch):
@@ -172,8 +180,8 @@ async def test_reader_batches_by_size_and_preserves_order(monkeypatch):
     r._dispatch_batch = spy
     r.start()
     try:
-        await asyncio.wait_for(event.wait(), timeout=1.0)
-        assert batches == [[b"A", b"B", b"C"]]
+        await asyncio.wait_for(event.wait(), timeout=2.0)
+        assert batches == [[b"A"], [b"B", b"C"]]
         assert dispatched == [b"A", b"B", b"C"]
     finally:
         await r.stop()
