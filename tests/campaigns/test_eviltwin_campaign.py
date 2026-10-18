@@ -114,6 +114,13 @@ def _client_m2(snonce: bytes) -> bytes:
     return data_header(to_ds=True, bssid=_BSSID_B, client=_CLIENT_B) + LLC_SNAP_EAPOL + payload
 
 
+async def _capture_after_start(camp, ap_entry, hs) -> None:
+    task = asyncio.create_task(camp._loop())
+    await asyncio.sleep(0.05)
+    ap_entry.handshakes[_CLIENT] = hs
+    await asyncio.wait_for(task, timeout=1.0)
+
+
 def test_visible_and_ineligible():
     assert EvilTwinCampaign.visible(_target())
     assert EvilTwinCampaign.visible(SimpleNamespace(ssid=None, akm_suites=[2])) is False
@@ -142,12 +149,12 @@ async def test_own_bssid_marks_twin_and_keys_capture_on_it():
     array, twin, punt = _FakeArray(), _FakeIface(), _FakeIface(11)
     own_b = bytes.fromhex("9483c48c3f79")            # target BSSID + 1 nibble: an own-BSSID twin
     own_s = "94:83:c4:8c:3f:79"
-    array.access_points[own_s] = SimpleNamespace(handshakes={_CLIENT: _crackable_hs()})
+    array.access_points[own_s] = SimpleNamespace(handshakes={})
     camp = EvilTwinCampaign(array, _target(), _input(twin, punt, modes=(PuntMode.CSA,), bssid=own_s))
     assert camp.same_bssid is False
     assert camp.twin_bssid == own_s
     assert camp.twin_beacon[10:16] == own_b and camp.twin_beacon[16:22] == own_b  # Addr2/Addr3 rewritten
-    await asyncio.wait_for(camp._loop(), timeout=1.0)   # exits at once: capture is on the twin entry
+    await _capture_after_start(camp, array.access_points[own_s], _crackable_hs())  # on the twin entry
     assert own_s in array.evil_twins                    # hidden from the scanner
     await camp.teardown()
     assert own_s in array.evil_twins                    # stays hidden after teardown (no re-attack)
@@ -171,34 +178,47 @@ async def test_arms_punts_and_tears_down():
     assert not camp.captured
 
 
-async def test_stops_when_sink_has_crackable_handshake():
+async def test_stops_on_crackable_handshake_captured_after_start():
+    array, twin, punt = _FakeArray(), _FakeIface(), _FakeIface(11)
+    array.access_points[_BSSID] = SimpleNamespace(handshakes={})
+    camp = EvilTwinCampaign(array, _target(), _input(twin, punt, modes=(PuntMode.DEAUTH, PuntMode.CSA)))
+    await _capture_after_start(camp, array.access_points[_BSSID], _crackable_hs())
+    await camp.teardown()
+    assert camp.captured
+
+
+async def test_handshake_captured_before_start_does_not_stop_it():
     array, twin, punt = _FakeArray(), _FakeIface(), _FakeIface(11)
     array.access_points[_BSSID] = SimpleNamespace(handshakes={_CLIENT: _crackable_hs()})
     camp = EvilTwinCampaign(array, _target(), _input(twin, punt, modes=(PuntMode.DEAUTH, PuntMode.CSA)))
-    await asyncio.wait_for(camp._loop(), timeout=1.0)   # exits at once: already captured
+    task = asyncio.create_task(camp._loop())
+    for _ in range(50):
+        await asyncio.sleep(0)
+    assert punt.sent                                   # got past the capture check and punted
+    assert not task.done() and not camp.captured
+    camp.stopped = True
+    await task
     await camp.teardown()
-    assert camp.captured
-    assert twin.fake_mac_arms >= 1                     # twin still stood up
-    assert punt.sent == []                             # never punted: capture was already there
+    assert not camp.captured
 
 
 async def test_stops_on_real_ap_handshake_with_distinct_twin():
     # Single-card/distinct twin: a 4-way sniffed on the REAL AP (target BSSID) after a punt kicks a
     # client back onto it also completes, not just a forged M2 on the twin's own BSSID.
     array, twin, punt = _FakeArray(), _FakeIface(), _FakeIface(11)
-    array.access_points[_BSSID] = SimpleNamespace(handshakes={_CLIENT: _crackable_hs()})
+    array.access_points[_BSSID] = SimpleNamespace(handshakes={})
     camp = EvilTwinCampaign(array, _target(),
                             _input(twin, punt, modes=(PuntMode.DEAUTH,), bssid="94:83:c4:8c:3f:79"))
     assert camp.same_bssid is False
-    await asyncio.wait_for(camp._loop(), timeout=1.0)
+    await _capture_after_start(camp, array.access_points[_BSSID], _crackable_hs())
     assert camp.captured
 
 
 async def test_stops_on_crackable_pmkid():
     array, twin, punt = _FakeArray(), _FakeIface(), _FakeIface(11)
-    array.access_points[_BSSID] = SimpleNamespace(handshakes={_CLIENT: _pmkid_hs()})
+    array.access_points[_BSSID] = SimpleNamespace(handshakes={})
     camp = EvilTwinCampaign(array, _target(), _input(twin, punt, modes=(PuntMode.DEAUTH,)))
-    await asyncio.wait_for(camp._loop(), timeout=1.0)
+    await _capture_after_start(camp, array.access_points[_BSSID], _pmkid_hs())
     assert camp.captured
 
 

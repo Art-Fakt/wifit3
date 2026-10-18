@@ -109,6 +109,7 @@ class EvilTwinCampaign(Campaign):
         self.punter = self._make_punter(evil_input, target.bssid)
         self.fakeap: Optional[FakeAP] = None
         self.captured = False
+        self.captures_before_start: set[tuple[str, str, bytes]] = set()
 
     def _make_punter(self, evil_input: EvilTwinInput, target_bssid: str) -> Optional[Punter]:
         if not evil_input.punt_modes:
@@ -118,6 +119,7 @@ class EvilTwinCampaign(Campaign):
                       str_to_mac(self.twin_bssid), self.twin_channel, self.target_channel)
 
     async def _loop(self) -> None:
+        self.captures_before_start = self._crackable_captures()
         self.fakeap = FakeAP(self.twin_iface, str_to_mac(self.twin_bssid), self.ssid,
                              self.twin_channel, self.twin_beacon, rx_source=self.twin_iface,
                              record_m1=self.array.record_injected_eapol)
@@ -159,13 +161,19 @@ class EvilTwinCampaign(Campaign):
             elapsed += _POLL_SEC
 
     def _has_crackable_capture(self) -> bool:
-        # Twin BSSID holds our forged M2; the target BSSID holds any real 4-way / PMKID after a punt.
+        return bool(self._crackable_captures() - self.captures_before_start)
+
+    def _crackable_captures(self) -> set[tuple[str, str, bytes]]:
+        """(bssid, client, ANonce or PMKID) per crackable capture. Twin BSSID holds our forged M2;
+        the target BSSID holds any real 4-way / PMKID after a punt."""
+        captures = set()
         for bssid in {self.twin_bssid, self.ap.bssid.lower()}:
             ap = self.array.access_points.get(bssid)
-            if ap and any(crackable_pairs(hs) or (hs.pmkid and pmkid_crackable(hs))
-                          for hs in ap.handshakes.values()):
-                return True
-        return False
+            for client, hs in (ap.handshakes.items() if ap else ()):
+                captures |= {(bssid, client, pair.instance_key) for pair in crackable_pairs(hs)}
+                if hs.pmkid and pmkid_crackable(hs):
+                    captures.add((bssid, client, hs.pmkid))
+        return captures
 
     async def teardown(self) -> None:
         if self.fakeap is None:
