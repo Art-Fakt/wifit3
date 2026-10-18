@@ -276,8 +276,9 @@ class FocusViewV2(Screen):
         target = getattr(self.app, "target_ap", None)
         if target is not self._target_ap:
             await self._enter_target()
-        elif target is not None:
+        elif target is not None and not self._any_campaign_active():
             # Re-pin the pool to the target's channel on re-entry (STACK across channel-capable cards).
+            # Not while a campaign runs: it owns its cards' channels (EvilTwin's twin sits off-target).
             array = self.app.array
             if array is not None:
                 ok = await array.set_channel(target.channel, scan=False)
@@ -434,7 +435,10 @@ class FocusViewV2(Screen):
 
     async def _enter_target(self) -> None:
         """Bind to ``app.target_ap``: stop campaigns, reset state, update panels/radio/log."""
+        campaign = self._controls.current
         self._controls.stop()
+        if campaign is not None:
+            await campaign.stop()      # let its teardown finish before we retune for the new target
         self._stop_probe()
 
         ap = getattr(self.app, "target_ap", None)
@@ -1306,7 +1310,10 @@ class FocusViewV2(Screen):
 
     async def action_go_back(self) -> None:
         # Tear down any running attack: Scanner doesn't own the AP's channel, and a forged daemon would keep injecting.
+        campaign = self._controls.current
         self._controls.stop()
+        if campaign is not None:
+            await campaign.stop()      # teardown finishes before Scanner resumes hopping
         self._stop_probe()
         ap = self._target_ap
         logger.info("[FOCUS] leave: ssid=%r bssid=%s",
