@@ -111,6 +111,7 @@ class BreathingArt(Static):
         self._blink = "idle"      # idle | on | refractory
         self._blink_left = 0
         self._pending = False     # a pulse arrived mid-cycle → blink again next
+        self._green: int | None = None   # LED level last painted; None forces the next paint
 
     def on_mount(self) -> None:
         w, h = art_size(self._name)
@@ -148,7 +149,10 @@ class BreathingArt(Static):
 
     def _repaint(self) -> None:
         green = _FLICKER_GREEN if self._blink == "on" else _breathe_green(self._phase)
-        self.update(_paint(self._name, green))
+        if green == self._green:
+            return
+        self._green = green
+        self.update(_paint(self._name, green), layout=False)    # the box is pinned to the art size
 
     def set_art(self, name: str) -> None:
         """Swap which .ans this widget shows: the card art follows the selected/primary card. No-op
@@ -157,6 +161,7 @@ class BreathingArt(Static):
         if name == self._name:
             return
         self._name = name
+        self._green = None
         w, h = art_size(name)
         self.styles.width = w
         self.styles.height = h
