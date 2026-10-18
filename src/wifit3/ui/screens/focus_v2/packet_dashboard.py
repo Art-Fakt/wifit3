@@ -159,7 +159,7 @@ class PacketDashboard(Static):
         # card/router columns as the band grows.
         h = self.content_size.height or len(lines)
         pad = max(0, (h - len(lines)) // 2)
-        self.update(Text("\n").join([Text("")] * pad + lines))
+        self.update(Text("\n").join([Text("")] * pad + lines), layout=False)   # height: 100%
 
     def _row(self, label: str, color: str, cells: str, num: str, bw: int) -> Text:
         """Right-aligned label · space · bars (right-aligned, newest at the right)

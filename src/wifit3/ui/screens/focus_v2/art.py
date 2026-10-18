@@ -30,6 +30,7 @@ _LED = (0, 128, 0)                 # dark green = the animation target
 _BREATHE_LO = 60
 _BREATHE_HI = 150
 _FLICKER_GREEN = 255
+_BREATHE_LEVELS = 4    # each level change re-renders the whole art; ~4 repaints/s per cycle
 
 
 @lru_cache(maxsize=None)
@@ -79,7 +80,8 @@ def _paint(name: str, green: int) -> Text:
 def _breathe_green(phase: float) -> int:
     """Idle-glow green level for ``phase`` (0..1, one smooth lo->hi->lo cycle)."""
     factor = (1.0 - math.cos(2.0 * math.pi * phase)) / 2.0      # 0 -> 1 -> 0
-    return int(round(_BREATHE_LO + (_BREATHE_HI - _BREATHE_LO) * factor))
+    step = round(factor * (_BREATHE_LEVELS - 1)) / (_BREATHE_LEVELS - 1)
+    return int(round(_BREATHE_LO + (_BREATHE_HI - _BREATHE_LO) * step))
 
 
 def breathe(name: str, phase: float) -> Text:

@@ -59,10 +59,10 @@ class ClientWidget(Horizontal):
         wipes text selection and burns CPU)."""
         if power != self._power:
             self._power = power
-            self._pwr_label.update(str(power))
+            self._pwr_label.update(str(power), layout=False)      # fixed-width column
         if packets != self._packets:
             self._packets = packets
-            self._pkts_label.update(str(packets))
+            self._pkts_label.update(str(packets), layout=False)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         event.stop()
@@ -191,4 +191,6 @@ class ClientsList(Vertical):
             btn.disabled = disabled
 
     def _update_title(self) -> None:
-        self.border_title = f"CLIENTS ({len(self._rows)})"
+        title = f"CLIENTS ({len(self._rows)})"
+        if self.border_title != title:
+            self.border_title = title
