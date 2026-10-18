@@ -79,9 +79,15 @@ class FakeAP:
         self._beacon_task = asyncio.create_task(self._beacon_loop())
 
     async def stop(self) -> None:
-        """Idempotent teardown: reap the beacon task, drop the RX hook, clear the fake MAC."""
+        """Idempotent teardown: drop the RX hook, reap the beacon task, clear the fake MAC."""
         self._running = False
         error = None
+        if self._rx_registered:
+            self._rx_registered = False
+            try:
+                self.rx_source.unregister_rx_callback(self.on_rx)
+            except Exception as exc:
+                error = exc
         beacon_task, self._beacon_task = self._beacon_task, None
         if beacon_task is not None:
             beacon_task.cancel()
@@ -89,12 +95,6 @@ class FakeAP:
                 await beacon_task
             except asyncio.CancelledError:
                 pass
-            except Exception as exc:
-                error = exc
-        if self._rx_registered:
-            self._rx_registered = False
-            try:
-                self.rx_source.unregister_rx_callback(self.on_rx)
             except Exception as exc:
                 error = error or exc
         if self._fake_mac_armed:

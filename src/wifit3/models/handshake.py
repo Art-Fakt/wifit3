@@ -2,7 +2,7 @@
 4-way handshake (or PMKID) they assemble into.
 """
 from dataclasses import dataclass, field
-from typing import Optional, List, Set, Dict, Tuple
+from typing import ClassVar, Optional, List, Set, Dict, Tuple
 
 
 @dataclass
@@ -34,14 +34,19 @@ class Handshake:
     ``is_complete`` is True only when the stored messages form a hashcat-crackable pair
     (M1+M2, M2+M3, M3+M4, or M1+M4).
     """
+    MAX_MESSAGES: ClassVar[int] = 256
+    RETAINED_MESSAGES: ClassVar[int] = 192
+    MAX_COMPLETE_INSTANCES: ClassVar[int] = 32
+
     bssid: str
     client_mac: str
     beacon_frame: Optional[bytes] = None
 
-    # All EAPOL-Key messages we've seen for this client, in arrival order.
-    # We never wipe (only append-with-dedup), so once a valid pair is
-    # captured nothing can clobber it.
+    # EAPOL-Key messages seen for this client, in arrival order, deduplicated.
+    # Past MAX_MESSAGES, pruning keeps the best MAX_COMPLETE_INSTANCES pairs plus the newest messages.
     messages: List[HandshakeMessage] = field(default_factory=list)
+    _raw_messages: Set[bytes] = field(default_factory=set, init=False, repr=False, compare=False)
+    _indexed_messages: int = field(default=0, init=False, repr=False, compare=False)
 
     # Captured PMKID bytes (16 B from the RSN IE in EAPOL M1).
     pmkid: Optional[bytes] = None
@@ -98,5 +103,40 @@ class Handshake:
     def total_messages(self) -> int:
         return len(self.messages)
 
+    def _sync_message_index(self) -> None:
+        if self._indexed_messages != len(self.messages):
+            self._raw_messages = {message.raw for message in self.messages}
+            self._indexed_messages = len(self.messages)
+
     def has_message(self, raw: bytes) -> bool:
-        return any(f.raw == raw for f in self.messages)
+        self._sync_message_index()
+        return raw in self._raw_messages
+
+    def add_message(self, message: HandshakeMessage) -> bool:
+        self._sync_message_index()
+        if message.raw in self._raw_messages:
+            return False
+        self.messages.append(message)
+        self._raw_messages.add(message.raw)
+        self._indexed_messages += 1
+        if len(self.messages) > self.MAX_MESSAGES:
+            self._prune_messages()
+        return True
+
+    def _prune_messages(self) -> None:
+        keep_ids: Set[int] = set()
+        instances: Set[bytes] = set()
+        for pair in self._crackable_pairs():
+            if pair.instance_key in instances:
+                continue
+            instances.add(pair.instance_key)
+            keep_ids.update((id(pair.anonce_frame), id(pair.mic_frame)))
+            if len(instances) >= self.MAX_COMPLETE_INSTANCES:
+                break
+        for message in reversed(self.messages):
+            if len(keep_ids) >= self.RETAINED_MESSAGES:
+                break
+            keep_ids.add(id(message))
+        self.messages = [message for message in self.messages if id(message) in keep_ids]
+        self._raw_messages = {message.raw for message in self.messages}
+        self._indexed_messages = len(self.messages)
