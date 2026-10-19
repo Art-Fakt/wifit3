@@ -363,6 +363,8 @@ class WlanSink:
         if pmkid and not hs.pmkid:
             hs.pmkid = pmkid
             hs.pmkid_akm = akm
+            if pkt.key_info is not None:
+                hs.pmkid_key_descriptor_version = pkt.key_info & 3
             logger.info(f"[PMKID] {bssid} <-> {client_mac} captured {pmkid.hex()}")
         return True
 

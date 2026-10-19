@@ -165,10 +165,11 @@ def _m1m2(*, offered, client=None):
     return hs
 
 
-def _hs_pmkid(*, offered, client=None):
+def _hs_pmkid(*, offered, client=None, m1_key_descriptor_version=None):
     hs = Handshake(bssid="aa:bb:cc:dd:ee:ff", client_mac="11:22:33:44:55:66",
                    beacon_frame=b"B", pmkid=b"\x01" * 16, pmkid_akm=client)
     hs.akm_offered = list(offered)
+    hs.pmkid_key_descriptor_version = m1_key_descriptor_version
     return hs
 
 
@@ -386,6 +387,21 @@ def test_pmkid_unknown_client_assumes_sha1():
     """Asymmetry vs SAE: AKM 6 is rare, so a PMKID of unknown AKM on a PSK+PSK256
     AP is assumed to be the common SHA1 one (emit). We don't withhold."""
     assert wpa.crackable_pmkid_akm(_hs_pmkid(offered=[2, 6], client=None)) == 2
+
+
+def test_pmkid_unknown_client_takes_m1_key_descriptor_version():
+    """hcxpcapngtool's rule: a PMKID from a keyver-3 M1 is HMAC-SHA256, from keyver 2 HMAC-SHA1."""
+    assert wpa.crackable_pmkid_akm(_hs_pmkid(offered=[2, 6], m1_key_descriptor_version=3)) == 6
+    assert wpa.crackable_pmkid_akm(_hs_pmkid(offered=[2, 6], m1_key_descriptor_version=2)) == 2
+    assert wpa.crackable_pmkid_akm(_hs_pmkid(offered=[], m1_key_descriptor_version=3)) == 6
+
+
+def test_pmkid_m1_key_descriptor_version_never_overrides_the_withhold():
+    assert wpa.crackable_pmkid_akm(_hs_pmkid(offered=[1], m1_key_descriptor_version=2)) is None
+    assert wpa.crackable_pmkid_akm(_hs_pmkid(offered=[2, 8], m1_key_descriptor_version=2)) is None
+    assert wpa.crackable_pmkid_akm(_hs_pmkid(offered=[4, 6], m1_key_descriptor_version=3)) is None
+    assert wpa.crackable_pmkid_akm(_hs_pmkid(offered=[2, 6], client=8,
+                                             m1_key_descriptor_version=3)) is None
 
 
 def test_pmkid_sae_or_ft_unknown_withheld():

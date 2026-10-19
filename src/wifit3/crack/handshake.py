@@ -94,8 +94,8 @@ _NC_BIT = 0x80
 #     flagged by MESSAGEPAIR "03"). FT and the other AKMs yield a hash -m 22000 can't take.
 #
 # SAE, FT, EAP, and OWE are *strict* (withhold on an unconfirmed transition AP).
-# AKM 6 is rare, so a PMKID of unknown AKM is assumed to be the common HMAC-SHA1
-# one unless the AP offers no plain PSK at all.
+# A PMKID of unknown AKM takes the algorithm from its M1's key descriptor version
+# (3 = SHA256, 2 = SHA1); failing that, SHA1 unless the AP offers no plain PSK.
 _SAE_AKMS = frozenset({8, 9, 24, 25})       # SAE / FT-SAE / SAE-EXT-KEY / FT-SAE-EXT-KEY
 _FT_PSK_AKMS = frozenset({4, 19})           # FT-PSK / FT-PSK-SHA384
 _EAP_AKMS = frozenset({1, 3, 5, 11, 12, 13})  # EAP/FT-EAP/EAP-SHA256/EAP-Suite-B[-192]/FT-EAP-SHA384 (Enterprise)
@@ -104,6 +104,7 @@ _EAPOL_BAD_AKMS = _SAE_AKMS | _FT_PSK_AKMS | _EAP_AKMS | _OWE_AKMS  # never -m 2
 _PMKID_PSK_AKM = 2                          # HMAC-SHA1 PMKID
 PMKID_PSK_SHA256_AKM = 6                    # HMAC-SHA256 PMKID
 _PMKID_PSK_AKMS = frozenset({_PMKID_PSK_AKM, PMKID_PSK_SHA256_AKM})
+_PMKID_AKM_BY_KEY_DESCRIPTOR_VERSION = {2: _PMKID_PSK_AKM, 3: PMKID_PSK_SHA256_AKM}
 _EAP_LABEL = "EAP/Enterprise"               # badge for a captured-but-worthless EAP 4-way
 _OWE_LABEL = "OWE"                          # badge for a captured-but-worthless OWE (open) 4-way
 
@@ -130,11 +131,13 @@ def crackable_pmkid_akm(hs: Handshake) -> Optional[int]:
     offered = set(hs.akm_offered)
     if offered & (_SAE_AKMS | _FT_PSK_AKMS):
         return None                   # SAE/FT could be the negotiated AKM → withhold
-    if not offered or _PMKID_PSK_AKM in offered:
-        return _PMKID_PSK_AKM         # no AKM info (fixtures / pre-RSN) or PSK offered → SHA1
-    if PMKID_PSK_SHA256_AKM in offered:
-        return PMKID_PSK_SHA256_AKM
-    return None
+    psk_offered = offered & _PMKID_PSK_AKMS if offered else _PMKID_PSK_AKMS  # none: fixtures / pre-RSN
+    if not psk_offered:
+        return None
+    m1_akm = _PMKID_AKM_BY_KEY_DESCRIPTOR_VERSION.get(hs.pmkid_key_descriptor_version)
+    if m1_akm in psk_offered:
+        return m1_akm                 # the M1's key descriptor version, as hcxpcapngtool reads it
+    return _PMKID_PSK_AKM if _PMKID_PSK_AKM in psk_offered else PMKID_PSK_SHA256_AKM
 
 
 def pmkid_crackable(hs: Handshake) -> bool:
