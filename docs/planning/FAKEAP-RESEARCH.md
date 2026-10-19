@@ -110,3 +110,41 @@ hostapd-mana / eaphammer, WiFi Pineapple (PineAP, KARMA/Jasager).
   the client finds it by scanning. Deauth is a separate optional module.
 - Default twin is open (MITM / portal). Evil WPA module: clones the SSID only, captures a
   full handshake or PMKID.
+
+## Observed behavior: wifit3 field tests (2026-10-17/18)
+
+Sample: 1 router (GL-MT3000, 2.4 GHz, target on CH11), 1 client each of iOS, macOS and
+Windows, 1 run per row unless stated. Passive MT7925AU sniffer on the twin's channel.
+Linux and Android are untested: the Android phone (OnePlus 6T) can't join this router's
+WPA3 (no H2E).
+
+Twin configurations:
+- **Same-channel:** twin on the target's channel, BSSID = target BSSID + 1.
+- **Decoy-channel:** twin on another channel (CH1), same BSSID as the target, CSA beacons
+  point clients at it.
+
+| Security | PMF | Setup | Client | Result |
+|---|---|---|---|---|
+| WPA2 | Disabled | AutoDeauth, deauth, no twin | not recorded | Clients reconnect to the real AP; handshake captured there. BTM evicts too. |
+| WPA2 | Disabled | Same-channel twin, BTM every 5 s, no deauth | iOS | Reassociated to the twin with the password saved for the target; M2 captured. |
+| WPA2 | Required | AutoDeauth, CSA only, no twin | iOS, macOS, Windows | Each reconnected to the real AP; handshake captured (1 run each). |
+| WPA3->2 transition | Optional | Decoy-channel twin + CSA | iOS | Unprompted: one probe, nothing after the probe response. User taps the twin and types the password: M2 captured. |
+| WPA3->2 transition | Optional | Decoy-channel twin + CSA | Windows | Follows the CSA to CH1, probes the SSID, then sends QoS/null data to the twin as if still associated. Never authenticates. Deauth (reason 7) in reply to that data: 1 of 2 ACKed, 1 deauth sent back, no reconnect to the twin. |
+| WPA3->2 transition | Optional | Decoy-channel twin + CSA | macOS | Never joined the twin. |
+
+Notes:
+- WPA3->2 Optional: SAE clients ignore deauth; CSA is what moves iOS and Windows.
+- WPA2 Required: an earlier run with a twin up had iOS refusing to auto-join. With no twin,
+  CSA alone got it to rejoin the real AP.
+- A first same-channel BTM run was invalid: iOS still held a password saved from an earlier
+  twin. Forget the twin network on the client between runs.
+- The sniffer only hears what reaches it, and data payloads are encrypted with the real AP's
+  keys, so it can't say what the Windows data frames carry.
+
+Untested: WPA2 PMF Optional (any setup); WPA2 with a decoy-channel twin; WPA3->2 PMF
+Required; same-channel twin on anything but WPA2 PMF Disabled; Linux and Android clients.
+WPA3-only (PMF Required) is out of scope: no campaigns run against it.
+
+Inferred, not measured: a same-channel twin has no lever against PMF clients, because the
+real AP answers the client's SA Query. Unconfirmed hunch: the twin's RSN IE differing from
+the target's is what stops clients from starting auth.
