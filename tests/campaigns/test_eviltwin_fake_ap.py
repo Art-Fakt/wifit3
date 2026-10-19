@@ -207,7 +207,7 @@ async def test_data_from_an_associated_client_is_not_deauthed():
     fap.iface.sent.clear()
     fap.on_rx(_parse(data_header(to_ds=True, bssid=_BSSID, client=_CLIENT) + b"\x00\x00x"))
     await _flush()
-    assert fap.stats.strays == 0 and not fap.iface.sent
+    assert fap.stats.strays == 0 and not any(f[0] == 0xC0 for f in fap.iface.sent)
 
 
 async def test_m2_to_another_bssid_ignored():
@@ -267,3 +267,82 @@ async def test_stop_surfaces_a_teardown_failure_after_cleaning_up():
     with pytest.raises(RuntimeError, match="clear failed"):
         await fap.stop()
     assert rx.registered == 0
+
+
+@pytest.fixture
+def sleeps(monkeypatch):
+    """Every asyncio.sleep returns after one loop turn; the requested delays are recorded."""
+    real_sleep = asyncio.sleep
+    delays: list[float] = []
+
+    async def fast_sleep(delay, result=None):
+        delays.append(delay)
+        await real_sleep(0)
+        return result
+
+    monkeypatch.setattr(asyncio, "sleep", fast_sleep)
+    return delays
+
+
+async def _turns(n: int = 50) -> None:
+    for _ in range(n):
+        await asyncio.sleep(0)
+
+
+def _sent_m1s(fap) -> list:
+    return [_parse(f) for f in fap.iface.sent if f[:2] == b"\x08\x02"]
+
+
+async def test_m1_is_resent_with_the_same_anonce_and_the_next_replay_counter(sleeps):
+    m1s: list[bytes] = []
+    fap = _fakeap(m1_sink=m1s.append)
+    fap.on_rx(_parse(auth_req(_BSSID, _CLIENT)))
+    fap.on_rx(_parse(assoc_req(_BSSID, _CLIENT, _SSID, GENERIC_RSN_IE)))
+    await _turns()
+    sent = _sent_m1s(fap)
+    assert [int.from_bytes(m.replay_counter, "big") for m in sent] == [1, 2, 3, 4]
+    assert {m.nonce for m in sent} == {fap.stats.clients["02:aa:bb:cc:dd:ee"].anonce}
+    assert [d for d in sleeps if d in (0.1, 1.0)] == [0.1, 1.0, 1.0]
+    assert [_parse(f).replay_counter for f in m1s] == [m.replay_counter for m in sent]
+    assert not fap._m1_tasks
+
+
+async def test_m2_stops_the_m1_resends(sleeps):
+    fap = _fakeap()
+    fap.on_rx(_parse(auth_req(_BSSID, _CLIENT)))
+    fap.on_rx(_parse(assoc_req(_BSSID, _CLIENT, _SSID, GENERIC_RSN_IE)))
+    while len(_sent_m1s(fap)) < 2:
+        await asyncio.sleep(0)
+    fap.on_rx(_parse(_m2(_BSSID, _CLIENT, bytes(range(32, 64)))))
+    await _turns()
+    assert len(_sent_m1s(fap)) == 2 and not fap._m1_tasks
+
+
+async def test_reassoc_starts_a_fresh_m1_sequence(sleeps):
+    fap = _fakeap()
+    fap.on_rx(_parse(auth_req(_BSSID, _CLIENT)))
+    fap.on_rx(_parse(assoc_req(_BSSID, _CLIENT, _SSID, GENERIC_RSN_IE)))
+    while len(_sent_m1s(fap)) < 2:
+        await asyncio.sleep(0)
+    first_anonce = fap.stats.clients["02:aa:bb:cc:dd:ee"].anonce
+    fap.on_rx(_parse(assoc_req(_BSSID, _CLIENT, _SSID, GENERIC_RSN_IE)))
+    await _turns()
+    sent = _sent_m1s(fap)
+    assert [m.nonce for m in sent].count(first_anonce) == 2
+    fresh = [int.from_bytes(m.replay_counter, "big") for m in sent if m.nonce != first_anonce]
+    assert fresh == [1, 2, 3, 4]
+
+
+async def test_stop_cancels_the_pending_m1_resends(sleeps):
+    iface, rx = _LifecycleIface(), _RxSource()
+    fap = FakeAP(iface, _BSSID, _SSID, 1, twin_beacon=bytes(60), rx_source=rx)
+    await fap.start()
+    fap.on_rx(_parse(auth_req(_BSSID, _CLIENT)))
+    fap.on_rx(_parse(assoc_req(_BSSID, _CLIENT, _SSID, GENERIC_RSN_IE)))
+    task = fap._m1_tasks["02:aa:bb:cc:dd:ee"]
+    await fap.stop()
+    await fap.stop()
+    sent = len(_sent_m1s(fap))
+    await _turns()
+    assert task.cancelled() and not fap._m1_tasks
+    assert len(_sent_m1s(fap)) == sent <= 1

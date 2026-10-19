@@ -305,3 +305,17 @@ async def test_run_drives_loop_and_restores_channel():
     assert twin.fake_mac_arms >= 1                    # _loop actually ran (not skipped)
     assert twin.current_channel == 11                # teardown restored the twin channel
     assert punt.sent                                 # the CSA punt went out the TX card
+
+
+def test_m2_pairs_with_the_resent_m1_whose_replay_counter_it_echoes():
+    sink = WlanSink()
+    sink.update(WlanFrameParser.parse_80211_frame(_BEACON, -40), "card0", 11)
+    anonce = bytes.fromhex("aa" * 32)
+    for replay in (1, 2, 3, 4):
+        sink.record_injected_eapol(eapol_m1(_BSSID_B, _CLIENT_B, anonce, replay=replay))
+    m2_payload = eapol_key(key_info=0x010A, key_len=0, replay=3, nonce=bytes.fromhex("02" * 32),
+                           key_data=GENERIC_RSN_IE, mic=bytes(range(16)))
+    m2 = data_header(to_ds=True, bssid=_BSSID_B, client=_CLIENT_B) + LLC_SNAP_EAPOL + m2_payload
+    sink.update(WlanFrameParser.parse_80211_frame(m2, -40), "card0", 11)
+    pairs = crackable_pairs(sink.access_points[_BSSID].handshakes[_CLIENT])
+    assert len(pairs) == 1 and pairs[0].anonce_frame.replay_hex == "0000000000000003"
