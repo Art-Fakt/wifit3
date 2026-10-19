@@ -1142,6 +1142,12 @@ class FocusViewV2(Screen):
             self._log("[bold green]✓ EvilTwin captured a crackable handshake[/bold green]")
         else:
             self._log("[bold red]EvilTwin stopped[/bold red]")
+        array = self.app.array
+        twin = None if camp.same_bssid or not array else array.access_points.get(camp.twin_bssid)
+        for client_mac in list(twin.handshakes) if twin else ():
+            result = self.app.vault.save_handshake(twin, client_mac)
+            if result is not None:
+                self._log(treelog.leaf(_save_line(result)))
 
     # ----- WEP: Generate IVs (Replay) + Chop ---------------------------------
 
