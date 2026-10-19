@@ -210,13 +210,12 @@ class FakeAP:
             self._tx(assoc_resp(self.bssid, client, channel=self.channel, status=_STATUS_INVALID_PMKID))
             return
         self._advance(cs, ClientPhase.ASSOCED)
-        self._tx(assoc_resp(self.bssid, client, channel=self.channel))
         anonce = os.urandom(32)
         rec = self.stats.clients[cs]
         rec.anonce, rec.replay = anonce, 1
         m1 = eapol_m1(self.bssid, client, anonce, replay=1)
         self.record_m1(m1)
-        self._tx(m1)
+        self._tx(assoc_resp(self.bssid, client, channel=self.channel), m1)
 
     def _on_m2(self, pkt, client: bytes) -> None:
         if getattr(pkt, "msg_num", 0) != 2:
@@ -237,5 +236,10 @@ class FakeAP:
             rec.phase = phase
             rec.last_advance = now
 
-    def _tx(self, frame: bytes) -> None:
-        asyncio.create_task(self.iface.send_no_wait(frame))
+    def _tx(self, *frames: bytes) -> None:
+        """Inject ``frames`` in order, each handed to the driver before the next."""
+        asyncio.create_task(self._send_in_order(frames))
+
+    async def _send_in_order(self, frames: tuple[bytes, ...]) -> None:
+        for frame in frames:
+            await self.iface.send_no_wait(frame)

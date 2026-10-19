@@ -114,6 +114,23 @@ async def test_auth_assoc_drives_m1_and_progress():
     assert any(f[:2] == b"\x10\x00" for f in fap.iface.sent)    # assoc resp went out
 
 
+async def test_m1_reaches_the_driver_after_the_assoc_resp():
+    class SlowMgmtIface(FakeIface):
+        async def send_no_wait(self, frame: bytes) -> bool:
+            if frame[0] & 0x0C == 0:                            # management frames take longer
+                for _ in range(5):
+                    await asyncio.sleep(0)
+            return await super().send_no_wait(frame)
+
+    fap = FakeAP(SlowMgmtIface(), _BSSID, _SSID, 1, twin_beacon=bytes(60))
+    fap.on_rx(_parse(auth_req(_BSSID, _CLIENT)))
+    fap.on_rx(_parse(assoc_req(_BSSID, _CLIENT, _SSID, GENERIC_RSN_IE)))
+    for _ in range(20):
+        await asyncio.sleep(0)
+    kinds = [f[:2] for f in fap.iface.sent]
+    assert kinds.index(b"\x10\x00") < kinds.index(b"\x08\x02")  # assoc-resp, then M1
+
+
 async def test_cached_sae_key_assoc_is_refused_with_status_53():
     fap = _fakeap()
     sae_rsn_with_pmkid = bytes.fromhex("30260100000fac040100000fac040100000fac08c0000100") + bytes(16)
