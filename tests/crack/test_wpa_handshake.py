@@ -366,27 +366,26 @@ def test_owe_needs_a_usable_pairing():
     assert wpa.withheld_capture_label(m1_only) is None
 
 
-# --- PMKID (WPA*01) gate: only plain-PSK (AKM 2) HMAC-SHA1 -------------------
+# --- PMKID (WPA*01) gate: PSK (AKM 2, HMAC-SHA1) and PSK-SHA256 (AKM 6) --------
 
 def test_pmkid_plain_psk_crackable():
-    assert wpa.pmkid_crackable(_hs_pmkid(offered=[2], client=2))
-    assert wpa.pmkid_crackable(_hs_pmkid(offered=[2]))      # unknown client, PSK-only AP
+    assert wpa.crackable_pmkid_akm(_hs_pmkid(offered=[2], client=2)) == 2
+    assert wpa.crackable_pmkid_akm(_hs_pmkid(offered=[2])) == 2   # unknown client, PSK-only AP
 
 
-def test_pmkid_sha256_client_suppressed():
-    """AKM-6 PMKID is HMAC-SHA256: hashcat's PMKID path is SHA1-only."""
-    assert not wpa.pmkid_crackable(_hs_pmkid(offered=[2, 6], client=6))
+def test_pmkid_sha256_client_crackable():
+    assert wpa.crackable_pmkid_akm(_hs_pmkid(offered=[2, 6], client=6)) == 6
 
 
-def test_pmkid_sha256_only_ap_suppressed():
-    """SHA256-PSK offered with no plain PSK → the PMKID can't be SHA1."""
-    assert not wpa.pmkid_crackable(_hs_pmkid(offered=[6]))
+def test_pmkid_sha256_only_ap_crackable():
+    """SHA256-PSK offered with no plain PSK → the PMKID can only be HMAC-SHA256."""
+    assert wpa.crackable_pmkid_akm(_hs_pmkid(offered=[6])) == 6
 
 
 def test_pmkid_unknown_client_assumes_sha1():
     """Asymmetry vs SAE: AKM 6 is rare, so a PMKID of unknown AKM on a PSK+PSK256
     AP is assumed to be the common SHA1 one (emit). We don't withhold."""
-    assert wpa.pmkid_crackable(_hs_pmkid(offered=[2, 6], client=None))
+    assert wpa.crackable_pmkid_akm(_hs_pmkid(offered=[2, 6], client=None)) == 2
 
 
 def test_pmkid_sae_or_ft_unknown_withheld():
@@ -400,12 +399,10 @@ def test_ft_pmkid_suppressed():
     assert not wpa.pmkid_crackable(_hs_pmkid(offered=[4], client=4))
 
 
-def test_akm6_eapol_crackable_but_pmkid_not():
-    """The split that motivates two gates: an AKM-6 (PSK-SHA256) network's EAPOL
-    cracks (keyver → AES-CMAC), but its PMKID (HMAC-SHA256) does not."""
+def test_akm6_eapol_and_pmkid_both_crackable():
     eapol = _m1m2(offered=[6], client=6)
     assert len(wpa.crackable_pairs(eapol)) == 1
-    assert not wpa.pmkid_crackable(_hs_pmkid(offered=[6], client=6))
+    assert wpa.pmkid_crackable(_hs_pmkid(offered=[6], client=6))
 
 
 def test_hc22000_line_shape():
