@@ -73,6 +73,8 @@ def mgmt_detail(sub: int, raw: bytes) -> str:
         return f" [{rsne_detail(raw, _ASSOC_REQ_IES[sub])}]"
     if sub in (0x01, 0x03) and len(raw) >= 28:
         return f" [status {int.from_bytes(raw[26:28], 'little')}]"
+    if sub in (0x0A, 0x0C) and len(raw) >= 26:
+        return f" [reason {int.from_bytes(raw[24:26], 'little')}]"
     return ""
 
 
