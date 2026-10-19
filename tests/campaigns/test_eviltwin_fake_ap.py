@@ -131,6 +131,26 @@ async def test_m1_reaches_the_driver_after_the_assoc_resp():
     assert kinds.index(b"\x10\x00") < kinds.index(b"\x08\x02")  # assoc-resp, then M1
 
 
+async def test_reassoc_req_gets_a_reassoc_resp():
+    fap = _fakeap()
+    fap.on_rx(_parse(auth_req(_BSSID, _CLIENT)))
+    req = assoc_req(_BSSID, _CLIENT, _SSID, GENERIC_RSN_IE)
+    fap.on_rx(_parse(b"\x20\x00" + req[2:28] + _BSSID + req[28:]))   # + current AP address
+    await _flush()
+    kinds = [f[:2] for f in fap.iface.sent]
+    assert b"\x30\x00" in kinds and b"\x10\x00" not in kinds
+
+
+async def test_assoc_resp_carries_the_twin_beacon_ht_elements():
+    ht_op = bytes.fromhex("3d03" "010000")
+    fap = FakeAP(FakeIface(), _BSSID, _SSID, 1, twin_beacon=bytes(36) + ht_op)
+    fap.on_rx(_parse(auth_req(_BSSID, _CLIENT)))
+    fap.on_rx(_parse(assoc_req(_BSSID, _CLIENT, _SSID, GENERIC_RSN_IE)))
+    await _flush()
+    resp = next(f for f in fap.iface.sent if f[:2] == b"\x10\x00")
+    assert resp.endswith(ht_op)
+
+
 async def test_cached_sae_key_assoc_is_refused_with_status_53():
     fap = _fakeap()
     sae_rsn_with_pmkid = bytes.fromhex("30260100000fac040100000fac040100000fac08c0000100") + bytes(16)

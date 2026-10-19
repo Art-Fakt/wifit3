@@ -204,10 +204,12 @@ class FakeAP:
     def _on_assoc(self, pkt, client: bytes) -> None:
         self.stats.assoc += 1
         cs = mac_to_str(client)
+        reassoc = pkt.subtype_id == 0x02
         if getattr(pkt, "assoc_akm", None) in _SAE_AKMS:
             # SAE after our open auth means a cached SAE key we don't hold: refuse it, as hostapd does.
             self.stats.cached_key_rejects += 1
-            self._tx(assoc_resp(self.bssid, client, channel=self.channel, status=_STATUS_INVALID_PMKID))
+            self._tx(assoc_resp(self.bssid, client, channel=self.channel, status=_STATUS_INVALID_PMKID,
+                                reassoc=reassoc, twin_beacon=self.twin_beacon))
             return
         self._advance(cs, ClientPhase.ASSOCED)
         anonce = os.urandom(32)
@@ -215,7 +217,8 @@ class FakeAP:
         rec.anonce, rec.replay = anonce, 1
         m1 = eapol_m1(self.bssid, client, anonce, replay=1)
         self.record_m1(m1)
-        self._tx(assoc_resp(self.bssid, client, channel=self.channel), m1)
+        self._tx(assoc_resp(self.bssid, client, channel=self.channel, reassoc=reassoc,
+                            twin_beacon=self.twin_beacon), m1)
 
     def _on_m2(self, pkt, client: bytes) -> None:
         if getattr(pkt, "msg_num", 0) != 2:
