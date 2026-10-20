@@ -355,3 +355,6 @@ RTL8187B_RTL8225_ANAPARAM3_OFF = 0x00
 # Retry count  [SRC] rtl8187.h:37
 # ----------------------------------------------------------------------
 RETRY_COUNT = 7
+
+# include/linux/ieee80211.h
+IEEE80211_FCTL_MOREFRAGS = 0x0400

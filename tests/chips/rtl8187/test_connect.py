@@ -4,7 +4,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import wifit3.chips.rtl8187.driver as drv
-from wifit3.chips.rtl8187.constants import CMD_RX_ENABLE, CMD_TX_ENABLE, HwRev
+from wifit3.chips.rtl8187.constants import HwRev
 from wifit3.chips.rtl8187.mac import ChipVariant
 from wifit3.chips.rtl8187.probe import ProbeResult
 from wifit3.chips.rtl8187.rtl8225 import RfSetup, RfVariant, TxPower
@@ -29,14 +29,12 @@ def _mock_bring_up(monkeypatch, calls: list[tuple]) -> drv.RTL8187Driver:
     monkeypatch.setattr(d, "_claim", lambda: calls.append(("claim",)))
     monkeypatch.setattr(drv, "probe", lambda t, product_id, is_rtl8187b: (calls.append(("probe",)), _probe_result())[1])
     monkeypatch.setattr(drv, "bulk_out_max_packet_size", lambda dev, ep: 64)
-    monkeypatch.setattr(drv, "is_chip_warm", lambda t: False)
     monkeypatch.setattr(drv, "build_rf_init", lambda t, setup, power: lambda _t: None)
     monkeypatch.setattr(drv, "cold_bring_up",
                         lambda t, rf_init, is_rtl8187b: (calls.append(("cold_bring_up",)), 0x909CFC0B)[1])
     monkeypatch.setattr(drv, "_config_channel",
                         lambda t, setup, ch, power:
                         calls.append(("config_channel", setup, ch, power)))
-    monkeypatch.setattr(d.transport, "read8", lambda addr: CMD_TX_ENABLE | CMD_RX_ENABLE)
     monkeypatch.setattr(drv, "RxReaderThread", MagicMock())
     return d
 

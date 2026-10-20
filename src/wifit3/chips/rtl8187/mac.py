@@ -599,7 +599,7 @@ def cold_bring_up(t: RTL8187Transport, rf_init: RFInit, is_rtl8187b: bool) -> in
     else:
         rtl8187b_init_hw(t, rf_init=rf_init)
     rx_conf = start(t, is_rtl8187b)
-    # A monitor vif requests FIF_OTHER_BSS | FIF_CONTROL; nothing was set before.
+    # A monitor vif requests FIF_OTHER_BSS | FIF_CONTROL.
     monitor_flags = FIF_OTHER_BSS | FIF_CONTROL
     rx_conf, _ = configure_filter(t, rx_conf, monitor_flags, monitor_flags, 0)
     return rx_conf

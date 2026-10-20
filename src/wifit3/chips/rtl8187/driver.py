@@ -9,14 +9,12 @@ from driver_sources/rtl818x-source-v6.18/rtl8187/dev.c):
     connect()
       -> claim USB interface (cfg + claim)
       -> detect_chip_variant            (mac.py)        TX_CONF[27:25] HWVER probe
-      -> is_chip_warm                   (mac.py)        CMD has TX_ENABLE|RX_ENABLE
-      -> [warm]  resume bulk-IN polling
-      -> [cold]  init_hw + rf.init + start              [M2]
+      -> init_hw + rf.init + start                      [M2]
       -> set_channel(1)                                 [M4]
       -> start RX loop                                  [M3]
 
 Milestone status:
-  * M1: control-transfer plumbing + chip-variant probe + warm probe.   [DONE]
+  * M1: control-transfer plumbing + chip-variant probe.   [DONE]
   * M2a: init_hw + start (MAC side, rf.init stubbed).                  [DONE]
   * M2b: rtl8225 BCD RF init.                                          [DONE]
   * M2c: rtl8225z2 RF init (auto-dispatched by build_rf_init).         [DONE]
@@ -43,10 +41,7 @@ from wifit3.dot11.parser import WlanFrameParser
 
 from .chan import config_channel as _config_channel
 from .constants import (
-    CMD_RX_ENABLE,
-    CMD_TX_ENABLE,
     DEVICE_RTL8187B,
-    REG_CMD,
     USB_EP_BULK_IN,
     USB_EP_BULK_IN_8187B,
     USB_EP_BULK_OUT,
@@ -55,7 +50,6 @@ from .constants import (
 from .mac import (
     ChipVariant,
     cold_bring_up,
-    is_chip_warm,
     stop,
 )
 from .probe import probe
@@ -192,9 +186,7 @@ class RTL8187Driver(Driver):
             await loop.run_in_executor(None, self._claim)
 
             # Probe: 93cx6 EEPROM (MAC + per-channel TX power + base), asic_rev,
-            # HWVER, RF variant, rfkill — the exact rtl8187_probe wire sequence. Runs on
-            # both warm + cold paths (the EEPROM TX-power table is what set_channel needs,
-            # and the reads are safe on a warm/RF-alive chip).
+            # HWVER, RF variant, rfkill — the exact rtl8187_probe wire sequence.
             _progress(0.20, "Probing (EEPROM MAC + TX power, asic_rev, HWVER, RF)")
             pr = await loop.run_in_executor(
                 None, probe, self.transport, self.dev.idProduct, self.is_rtl8187b_id)
@@ -212,47 +204,38 @@ class RTL8187Driver(Driver):
                 logger.warning("RTL8187B (%s): ported from the kernel source, untested on hardware",
                                pr.chip.hw_rev.name)
 
-            _progress(0.35, "Probing warm/cold state")
+            _progress(0.35, "Reading USB endpoints")
             self._bulk_in_ep = (USB_EP_BULK_IN_8187B if self.chip_variant.is_rtl8187b
                                 else USB_EP_BULK_IN)
             out_eps = (RTL8187B_BULK_OUT_EPS if self.chip_variant.is_rtl8187b
                        else (USB_EP_BULK_OUT,))
             self._bulk_out_max_packet_sizes = {
                 ep: bulk_out_max_packet_size(self.dev, ep) for ep in out_eps}
-            warm = await loop.run_in_executor(None, is_chip_warm, self.transport)
 
-            # ALWAYS run the full cold bring-up — no warm shortcut on this chip. The
-            # 8187L's RF/PHY/AGC state does NOT survive a USB handle close+reopen: the
-            # next set_configuration soft-resets the radio, yet the CMD TX/RX-enable
-            # bits persist, so is_chip_warm() reports "warm" while the AGC is dead
-            # (agc=0 in every RX descriptor → RSSI stuck at -4, ~3x fewer frames, weak
-            # handshake/EAPOL capture). Re-arming with start() alone (no RF init) leaves
-            # it broken. Measured 2026-06-12: cold 215 frames/s (RSSI -71..-14) vs warm
-            # 31-67 frames/s (RSSI all -4). The ~2 s cold init is the price of correct
-            # RX — supersedes the earlier warm-reattach optimisation, whose beacons/s
-            # check was ceiling-capped and missed the degradation.
-            logger.info("is_warm (CMD bits)=%s, re-initialising RF anyway", warm)
-            _progress(0.50, "Building RF init callback")
+            # Always cold: the RF/AGC does not survive a USB reopen (RTL8187L.md, "No warm reattach").
             rf_init = build_rf_init(self.transport, self._rf_setup, self._power)
-            _progress(0.55, "Cold bring-up (init_hw + RF + start + monitor entry)")
+            rf_name = self._rf_setup.variant.value
+
+            def _emit(pct: float, msg: str) -> None:
+                loop.call_soon_threadsafe(_progress, pct, msg)
+
+            def _rf_init_with_progress(t: RTL8187Transport) -> None:
+                _emit(0.55, f"RF init ({rf_name})")
+                rf_init(t)
+                _emit(0.75, "Starting MAC + entering monitor mode")
+
+            _progress(0.40, "Initialising MAC (init_hw)")
             self._rx_conf = await loop.run_in_executor(
-                None, cold_bring_up, self.transport, rf_init, self.chip_variant.is_rtl8187b
+                None, cold_bring_up, self.transport, _rf_init_with_progress,
+                self.chip_variant.is_rtl8187b,
             )
             self._started = True
             # mac80211's first rtl8187_config (dev.c:1155) tunes the band's first channel.
+            _progress(0.80, "Tuning channel 1")
             await loop.run_in_executor(
                 None, _config_channel, self.transport, self._rf_setup, 1, self._power,
             )
             self.current_channel = 1
-
-            # Verify CMD latched TX_ENABLE | RX_ENABLE (warm re-arm or cold start).
-            cmd = await loop.run_in_executor(None, self.transport.read8, REG_CMD)
-            if not (cmd & CMD_TX_ENABLE and cmd & CMD_RX_ENABLE):
-                logger.error(
-                    "bring-up finished but CMD=0x%02x missing TX/RX enable bits", cmd
-                )
-                return False
-            logger.debug("CMD=0x%02x - TX_ENABLE + RX_ENABLE latched", cmd)
 
             _progress(0.85, "Starting RX loop")
             self._rx_reader = RxReaderThread(
@@ -342,7 +325,8 @@ class RTL8187Driver(Driver):
     # ---- channel tune (M4) -----------------------------------------------
     async def set_channel(self, channel: int, scan: bool = False) -> bool:
         if self._rf_setup is None or self._power is None:
-            logger.error("RTL8187 set_channel(%d): connect() must run first", channel)
+            logger.error("RTL8187 set_channel(%d): RF setup / EEPROM TX power not probed yet "
+                         "(read in connect()); connect() must run first", channel)
             return False
         try:
             await asyncio.get_event_loop().run_in_executor(
@@ -364,7 +348,8 @@ class RTL8187Driver(Driver):
         by ``_stamp_tx_seq``."""
         max_packet_sizes = self._bulk_out_max_packet_sizes
         if max_packet_sizes is None or self.chip_variant is None:
-            logger.error("RTL8187 inject_frame: connect() must run first")
+            logger.error("RTL8187 inject_frame: bulk-OUT wMaxPacketSize / chip variant not set yet "
+                         "(read in connect()); connect() must run first")
             return False
         loop = asyncio.get_event_loop()
         try:

@@ -56,7 +56,7 @@ CAP_DIR = REPO / "driver_captures" / "captures_rtl8187_2"
 _RF7_TO_CHANNEL = {word: ch for ch, word in enumerate(rtl8225_chan, start=1)}
 _RF7_ADDR = 0x0007
 _RF7_PAGE = 0x8225
-_MONITOR_FLAGS = FIF_OTHER_BSS | FIF_CONTROL     # what a monitor vif asks configure_filter for
+_MONITOR_FLAGS = FIF_OTHER_BSS | FIF_CONTROL
 
 
 class Walk:

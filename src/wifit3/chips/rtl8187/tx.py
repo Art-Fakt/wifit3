@@ -32,7 +32,9 @@ import usb.core
 import usb.util
 
 from .constants import (
+    IEEE80211_FCTL_MOREFRAGS,
     RETRY_COUNT,
+    TX_DESC_FLAG_MOREFRAG,
     TX_DESC_FLAG_NO_ENC,
     USB_EP_BULK_OUT,
 )
@@ -87,7 +89,7 @@ def build_tx_hdr(
     flags |= TX_DESC_FLAG_NO_ENC                # bit 15
     flags |= (rate_hw_value & 0xF) << 24        # bits 24..27
     if morefrag:
-        flags |= 1 << 17
+        flags |= TX_DESC_FLAG_MOREFRAG
 
     # Kernel writes hdr->len = 0 — the frame length goes in `flags`.
     # The struct field is just padding for alignment.
@@ -131,7 +133,7 @@ def build_rtl8187b_tx_hdr(
     flags |= TX_DESC_FLAG_NO_ENC
     flags |= (rate_hw_value & 0xF) << 24
     if morefrag:
-        flags |= 1 << 17
+        flags |= TX_DESC_FLAG_MOREFRAG
 
     rts_duration = 0
     retry = ((retry_count - 1) & 0xFF) << 8
@@ -236,13 +238,15 @@ def inject_frame(
     forget behaviour should pass ``retry_count=1`` and a tight
     ``timeout_ms``.
     """
+    morefrag = bool(int.from_bytes(frame[:2], "little") & IEEE80211_FCTL_MOREFRAGS)  # dev.c:251
     if not is_rtl8187b:
         ep = USB_EP_BULK_OUT
-        hdr = build_tx_hdr(len(frame), rate_hw_value=rate_hw_value, retry_count=retry_count)
+        hdr = build_tx_hdr(len(frame), rate_hw_value=rate_hw_value, retry_count=retry_count,
+                           morefrag=morefrag)
     else:
         ep = rtl8187b_tx_ep(frame)
         hdr = build_rtl8187b_tx_hdr(len(frame), rate_hw_value=rate_hw_value,
-                                    retry_count=retry_count)
+                                    retry_count=retry_count, morefrag=morefrag)
     payload = hdr + frame
     sent = dev.write(ep, payload, timeout_ms)
     if sent != len(payload):

@@ -760,6 +760,21 @@ def test_inject_frame_sends_zlp_on_a_multiple_of_wmaxpacketsize():
     assert [len(w) for w in writes] == [64]
 
 
+def test_inject_frame_sets_morefrag_from_the_frame_control():
+    """dev.c:251: MOREFRAG (bit 17) follows the frame's More Fragments bit."""
+    import struct
+
+    from wifit3.chips.rtl8187.tx import inject_frame
+
+    for is_rtl8187b in (False, True):
+        for fc1, expected in ((0x00, 0), (0x04, 1 << 17)):
+            writes, dev = _bulk_writer()
+            frame = bytes([0x08, fc1]) + bytes(30)
+            inject_frame(dev, frame, {0x02: 512, 0x04: 512, 0x05: 512, 0x06: 512,
+                                      0x07: 512, 0x0C: 512}, is_rtl8187b)
+            assert struct.unpack_from("<I", writes[0])[0] & (1 << 17) == expected
+
+
 def test_bulk_out_max_packet_size_reads_the_endpoint_descriptor(monkeypatch):
     from unittest.mock import MagicMock
 
