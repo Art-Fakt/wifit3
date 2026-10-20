@@ -42,6 +42,7 @@ from wifit3.chips.rtl8187.constants import (
     REG_RX_CONF,
     REG_TALLY_CNT,
     REG_TX_CONF,
+    USB_PID_RTL8187,
 )
 from wifit3.chips.rtl8187.probe import probe
 from wifit3.chips.rtl8187.rtl8225 import build_rf_init, rtl8225_chan
@@ -100,7 +101,8 @@ def _peek_channel(w: Walk) -> int | None:
     return None
 
 
-def _walk_operational(w: Walk, setup, power, rx_conf: int, filter_flags: int) -> dict | None:
+def _walk_operational(w: Walk, setup, power, rfkill_mask: int, rx_conf: int,
+                      filter_flags: int) -> dict | None:
     """Dispatch each post-bring-up burst to its real handler at the cursor: a channel hop
     (rtl8187_config, opens on the TX_CONF read), a monitor-filter reapply (configure_filter,
     a lone RX_CONF write), or the periodic rfkill poll (opens on the GPIO0 read). The first
@@ -108,14 +110,13 @@ def _walk_operational(w: Walk, setup, power, rx_conf: int, filter_flags: int) ->
     while w.i < len(w.ops):
         o = w.peek()
         if _is(o, "IN", REG_GPIO0):                      # rfkill poll (R GPIO0,W GPIO0,R GPIO1)
-            w.run(lambda t: rfkill.is_radio_enabled(t))
+            w.run(lambda t: rfkill.is_radio_enabled(t, rfkill_mask))
             continue
         if _is(o, "IN", REG_TX_CONF, 4):                 # channel hop (rtl8187_config)
             ch = _peek_channel(w)
             if ch is None:
                 break
-            w.run(lambda t, ch=ch: chan.config_channel(
-                t, setup.asic_rev, setup.variant, ch, power))
+            w.run(lambda t, ch=ch: chan.config_channel(t, setup, ch, power))
             continue
         if _is(o, "OUT", REG_RX_CONF, 4):                # monitor-filter reapply
             changed = filter_flags ^ _MONITOR_FLAGS
@@ -162,7 +163,7 @@ def run(cap: str | None = None) -> int:
     # 1) PROBE — 93cx6 EEPROM (MAC + per-channel TX power + base), asic_rev, HWVER, detect_rf,
     #    rfkill init. Yields the RF setup + EEPROM TX-power table the rest of the walk needs.
     try:
-        pr = w.run(lambda t: probe(t))
+        pr = w.run(lambda t: probe(t, USB_PID_RTL8187, False))
     except rp.Divergence as e:
         print(f"\nFAIL (probe divergence) at op {w.i}:\n  {e}")
         return 1
@@ -172,16 +173,16 @@ def run(cap: str | None = None) -> int:
 
     # 2) Two rfkill polls fire between probe (rfkill_init) and airmon bringing the iface up.
     while _is(w.peek(), "IN", REG_GPIO0):
-        w.run(lambda t: rfkill.is_radio_enabled(t))
+        w.run(lambda t: rfkill.is_radio_enabled(t, pr.rfkill_mask))
 
     # 3) COLD BRING-UP — init_hw + the full rtl8225z2 RF init (8051 fast path) -> start ->
     #    configure_filter (monitor entry) -> the bring-up ch1 tune. One cursor, no re-anchoring.
     try:
         w.run(lambda t: mac.init_hw(t, rf_init=build_rf_init(t, pr.setup, pr.power)))
-        rx_conf = w.run(lambda t: mac.start(t))
+        rx_conf = w.run(lambda t: mac.start(t, False))
         rx_conf, filter_flags = w.run(lambda t: mac.configure_filter(
             t, rx_conf, _MONITOR_FLAGS, _MONITOR_FLAGS, 0))
-        w.run(lambda t: chan.config_channel(t, pr.setup.asic_rev, pr.setup.variant, 1, pr.power))
+        w.run(lambda t: chan.config_channel(t, pr.setup, 1, pr.power))
     except rp.Divergence as e:
         print(f"\nFAIL (cold bring-up divergence) at op {w.i}:\n  {e}")
         return 1
@@ -190,7 +191,7 @@ def run(cap: str | None = None) -> int:
 
     # 4) OPERATIONAL — every airodump/iw hop + filter reapply + rfkill poll, dispatched.
     try:
-        frontier = _walk_operational(w, pr.setup, pr.power, rx_conf, filter_flags)
+        frontier = _walk_operational(w, pr.setup, pr.power, pr.rfkill_mask, rx_conf, filter_flags)
     except rp.Divergence as e:
         print(f"\nFAIL (operational divergence) at op {w.i}:\n  {e}")
         return 1

@@ -1,4 +1,4 @@
-"""RTL8187L MAC-layer bring-up + warm/cold helpers.
+"""RTL8187L / RTL8187B MAC-layer bring-up + warm/cold helpers.
 
 Mirrors ``rtl8187_{set_anaparam,cmd_reset,init_hw,start,stop}`` from
 ``driver_sources/rtl818x-source-v6.18/rtl8187/dev.c``.
@@ -11,6 +11,26 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 from .constants import (
+    CW_CONF_PERPACKET_RETRY,
+    MSR_ENEDCA,
+    REG_ACM_CONTROL,
+    REG_ANAPARAM3A,
+    REG_HSSI_PARA,
+    REG_INT_MIG,
+    REG_MSR,
+    REG_TID_AC_MAP,
+    RETRY_COUNT,
+    RTL8187B_RTL8225_ANAPARAM2_OFF,
+    RTL8187B_RTL8225_ANAPARAM2_ON,
+    RTL8187B_RTL8225_ANAPARAM3_OFF,
+    RTL8187B_RTL8225_ANAPARAM3_ON,
+    RTL8187B_RTL8225_ANAPARAM_OFF,
+    RTL8187B_RTL8225_ANAPARAM_ON,
+    TX_AGC_CTL_FEEDBACK_ANT,
+    TX_AGC_CTL_PERPACKET_ANTSEL,
+    TX_AGC_CTL_PERPACKET_GAIN,
+    TX_CONF_DISREQQSIZE,
+    TX_CONF_HW_SEQNUM,
     ANAPARAM_OFF,
     ANAPARAM_ON,
     ANAPARAM2_OFF,
@@ -29,6 +49,7 @@ from .constants import (
     FIF_OTHER_BSS,
     HWVER_CHIP_NAMES,
     HWVER_DEFAULT_NAME,
+    HwRev,
     REG_ANAPARAM,
     REG_ANAPARAM2,
     REG_BRSR,
@@ -44,6 +65,7 @@ from .constants import (
     REG_INT_TIMEOUT,
     REG_MAGIC_FE18,
     REG_MAGIC_FE53,
+    REG_MAGIC_FFE1,
     REG_MAGIC_FFF4,
     REG_MAGIC_FFFF,
     REG_MAR,
@@ -60,7 +82,6 @@ from .constants import (
     REG_TX_AGC_CTL,
     REG_TX_CONF,
     REG_WPA_CONF,
-    RTL8187BvB,
     RX_CONF_BROADCAST,
     RX_CONF_BSSID,
     RX_CONF_CTRL,
@@ -71,6 +92,9 @@ from .constants import (
     RX_CONF_NICMAC,
     RX_CONF_ONLYERLPKT,
     RX_CONF_RX_AUTORESETPHY,
+    RTL818X_R8187B_B,
+    RTL818X_R8187B_D,
+    RTL818X_R8187B_E,
     TX_CONF_CW_MIN,
     TX_CONF_HWVER_MASK,
     TX_CONF_NO_ICV,
@@ -86,10 +110,10 @@ logger = logging.getLogger(__name__)
 # ----------------------------------------------------------------------
 @dataclass(frozen=True)
 class ChipVariant:
-    hwver_raw: int
-    name: str
+    hwver_raw: Optional[int]    # TX_CONF HWVER bits; None on a DEVICE_RTL8187B id (never read)
+    name: str                   # chip_name
     is_rtl8187b: bool
-    hw_rev: Optional[int]    # priv->hw_rev; None on 8187L silicon
+    hw_rev: Optional[HwRev]     # priv->hw_rev; None on 8187L silicon
 
 
 def detect_chip_variant(t: RTL8187Transport) -> ChipVariant:
@@ -101,8 +125,22 @@ def detect_chip_variant(t: RTL8187Transport) -> ChipVariant:
     hwver = tx_conf & TX_CONF_HWVER_MASK
     name = HWVER_CHIP_NAMES.get(hwver, HWVER_DEFAULT_NAME)
     if hwver == TX_CONF_R8187vD_B:      # early 8187B behind the 0x8187 PID (dev.c:1544-1550)
-        return ChipVariant(hwver_raw=hwver, name=name, is_rtl8187b=True, hw_rev=RTL8187BvB)
+        return ChipVariant(hwver_raw=hwver, name=name, is_rtl8187b=True, hw_rev=HwRev.RTL8187BvB)
     return ChipVariant(hwver_raw=hwver, name=name, is_rtl8187b=False, hw_rev=None)
+
+
+def detect_rtl8187b_hw_rev(t: RTL8187Transport) -> ChipVariant:
+    """The B-branch switch on 0xFFE1 in rtl8187_probe (dev.c:1567-1583)."""
+    reg = t.read8(REG_MAGIC_FFE1)
+    if reg == RTL818X_R8187B_B:
+        name, hw_rev = "RTL8187BvB", HwRev.RTL8187BvB
+    elif reg == RTL818X_R8187B_D:
+        name, hw_rev = "RTL8187BvD", HwRev.RTL8187BvD
+    elif reg == RTL818X_R8187B_E:
+        name, hw_rev = "RTL8187BvE", HwRev.RTL8187BvE
+    else:
+        name, hw_rev = "RTL8187BvB (default)", HwRev.RTL8187BvB
+    return ChipVariant(hwver_raw=None, name=name, is_rtl8187b=True, hw_rev=hw_rev)
 
 
 def is_chip_warm(t: RTL8187Transport) -> bool:
@@ -123,22 +161,26 @@ def is_chip_warm(t: RTL8187Transport) -> bool:
 RFInit = Callable[[RTL8187Transport], None]
 
 
-def set_anaparam(t: RTL8187Transport, rfon: bool) -> None:
-    """Drive the analogue baseband on/off.
-
-    Mirrors rtl8187_set_anaparam (dev.c:570-608) — L-branch only.
-
-    The CONFIG3 ANAPARAM_WRITE bit is the gate: set it before touching
-    ANAPARAM/ANAPARAM2, clear it after. Both register-window ops are
-    bracketed by EEPROM_CMD = CONFIG → NORMAL so the analog write
-    window is open.
-    """
-    if rfon:
-        anaparam = ANAPARAM_ON
-        anaparam2 = ANAPARAM2_ON
+def set_anaparam(t: RTL8187Transport, rfon: bool, is_rtl8187b: bool) -> None:
+    """Port of rtl8187_set_anaparam (dev.c:570-608): the ANAPARAM writes, gated by
+    CONFIG3_ANAPARAM_WRITE inside an EEPROM_CMD CONFIG window."""
+    anaparam3 = 0
+    if not is_rtl8187b:
+        if rfon:
+            anaparam = ANAPARAM_ON
+            anaparam2 = ANAPARAM2_ON
+        else:
+            anaparam = ANAPARAM_OFF
+            anaparam2 = ANAPARAM2_OFF
     else:
-        anaparam = ANAPARAM_OFF
-        anaparam2 = ANAPARAM2_OFF
+        if rfon:
+            anaparam = RTL8187B_RTL8225_ANAPARAM_ON
+            anaparam2 = RTL8187B_RTL8225_ANAPARAM2_ON
+            anaparam3 = RTL8187B_RTL8225_ANAPARAM3_ON
+        else:
+            anaparam = RTL8187B_RTL8225_ANAPARAM_OFF
+            anaparam2 = RTL8187B_RTL8225_ANAPARAM2_OFF
+            anaparam3 = RTL8187B_RTL8225_ANAPARAM3_OFF
 
     t.write8(REG_EEPROM_CMD, EEPROM_CMD_CONFIG)
     reg = t.read8(REG_CONFIG3)
@@ -146,6 +188,8 @@ def set_anaparam(t: RTL8187Transport, rfon: bool) -> None:
     t.write8(REG_CONFIG3, reg)
     t.write32(REG_ANAPARAM, anaparam)
     t.write32(REG_ANAPARAM2, anaparam2)
+    if is_rtl8187b:
+        t.write8(REG_ANAPARAM3A, anaparam3)
     reg &= ~CONFIG3_ANAPARAM_WRITE
     t.write8(REG_CONFIG3, reg & 0xFF)
     t.write8(REG_EEPROM_CMD, EEPROM_CMD_NORMAL)
@@ -207,7 +251,7 @@ def init_hw(t: RTL8187Transport, rf_init: RFInit) -> None:
                TALLY_SEL=0x80, 0xFFFF=0x60) bracketed by PGSELECT reg
     """
     # ---- pre-reset analog ON --------------------------------------------------
-    set_anaparam(t, rfon=True)
+    set_anaparam(t, rfon=True, is_rtl8187b=False)
     t.write16(REG_INT_MASK, 0)
 
     time.sleep(0.200)
@@ -223,7 +267,7 @@ def init_hw(t: RTL8187Transport, rf_init: RFInit) -> None:
     cmd_reset(t)
 
     # ---- post-reset analog ON, re-arm ----------------------------------------
-    set_anaparam(t, rfon=True)
+    set_anaparam(t, rfon=True, is_rtl8187b=False)
 
     # setup card (RF pin defaults)
     t.write16(REG_RFPINSSELECT, 0)
@@ -289,7 +333,129 @@ def init_hw(t: RTL8187Transport, rf_init: RFInit) -> None:
     t.write8(REG_PGSELECT, reg & 0xFF)
 
 
-def start(t: RTL8187Transport) -> int:
+# [SRC] dev.c:739-767  {addr | 0xFF00, value, idx}
+rtl8187b_reg_table = (
+    (0xF0, 0x32, 0), (0xF1, 0x32, 0), (0xF2, 0x00, 0), (0xF3, 0x00, 0),
+    (0xF4, 0x32, 0), (0xF5, 0x43, 0), (0xF6, 0x00, 0), (0xF7, 0x00, 0),
+    (0xF8, 0x46, 0), (0xF9, 0xA4, 0), (0xFA, 0x00, 0), (0xFB, 0x00, 0),
+    (0xFC, 0x96, 0), (0xFD, 0xA4, 0), (0xFE, 0x00, 0), (0xFF, 0x00, 0),
+
+    (0x58, 0x4B, 1), (0x59, 0x00, 1), (0x5A, 0x4B, 1), (0x5B, 0x00, 1),
+    (0x60, 0x4B, 1), (0x61, 0x09, 1), (0x62, 0x4B, 1), (0x63, 0x09, 1),
+    (0xCE, 0x0F, 1), (0xCF, 0x00, 1), (0xF0, 0x4E, 1), (0xF1, 0x01, 1),
+    (0xF2, 0x02, 1), (0xF3, 0x03, 1), (0xF4, 0x04, 1), (0xF5, 0x05, 1),
+    (0xF6, 0x06, 1), (0xF7, 0x07, 1), (0xF8, 0x08, 1),
+
+    (0x4E, 0x00, 2), (0x0C, 0x04, 2), (0x21, 0x61, 2), (0x22, 0x68, 2),
+    (0x23, 0x6F, 2), (0x24, 0x76, 2), (0x25, 0x7D, 2), (0x26, 0x84, 2),
+    (0x27, 0x8D, 2), (0x4D, 0x08, 2), (0x50, 0x05, 2), (0x51, 0xF5, 2),
+    (0x52, 0x04, 2), (0x53, 0xA0, 2), (0x54, 0x1F, 2), (0x55, 0x23, 2),
+    (0x56, 0x45, 2), (0x57, 0x67, 2), (0x58, 0x08, 2), (0x59, 0x08, 2),
+    (0x5A, 0x08, 2), (0x5B, 0x08, 2), (0x60, 0x08, 2), (0x61, 0x08, 2),
+    (0x62, 0x08, 2), (0x63, 0x08, 2), (0x64, 0xCF, 2),
+
+    (0x5B, 0x40, 0), (0x84, 0x88, 0), (0x85, 0x24, 0), (0x88, 0x54, 0),
+    (0x8B, 0xB8, 0), (0x8C, 0x07, 0), (0x8D, 0x00, 0), (0x94, 0x1B, 0),
+    (0x95, 0x12, 0), (0x96, 0x00, 0), (0x97, 0x06, 0), (0x9D, 0x1A, 0),
+    (0x9F, 0x10, 0), (0xB4, 0x22, 0), (0xBE, 0x80, 0), (0xDB, 0x00, 0),
+    (0xEE, 0x00, 0), (0x4C, 0x00, 2),
+
+    (0x9F, 0x00, 3), (0x8C, 0x01, 0), (0x8D, 0x10, 0), (0x8E, 0x08, 0),
+    (0x8F, 0x00, 0),
+)
+
+
+def rtl8187b_init_hw(t: RTL8187Transport, rf_init: RFInit) -> None:
+    """Port of rtl8187b_init_hw (dev.c:769-881). priv->slot_time / aifsn are not kept: only
+    conf_erp / conf_tx read them, and mac80211 calls neither for a monitor vif."""
+    set_anaparam(t, rfon=True, is_rtl8187b=True)
+
+    # Reset PLL sequence on 8187B
+    t.write8(0xFF61, 0x10)
+    reg = t.read8(0xFF62)
+    t.write8(0xFF62, reg & ~(1 << 5) & 0xFF)
+    t.write8(0xFF62, reg | (1 << 5))
+
+    cmd_reset(t)
+
+    set_anaparam(t, rfon=True, is_rtl8187b=True)
+
+    t.write16(0xFF34, 0x0FFF)                  # BRSR on 8187B: all 12 rates
+
+    reg = t.read8(REG_CW_CONF)
+    reg |= CW_CONF_PERPACKET_RETRY
+    t.write8(REG_CW_CONF, reg)
+
+    # Auto Rate Fallback Register (ARFR): 1M-54M
+    t.write16(0xFFE0, 0x0FFF, 1)
+    t.write8(0xFFE2, 0x00, 1)
+
+    t.write16(0xFFD4, 0xFFFF, 1)
+
+    t.write8(REG_EEPROM_CMD, EEPROM_CMD_CONFIG)
+    reg = t.read8(REG_CONFIG1)
+    t.write8(REG_CONFIG1, (reg & 0x3F) | 0x80)
+    t.write8(REG_EEPROM_CMD, EEPROM_CMD_NORMAL)
+
+    t.write8(REG_WPA_CONF, 0)
+    for addr, val, idx in rtl8187b_reg_table:
+        t.write8(addr | 0xFF00, val, idx)
+
+    t.write16(REG_TID_AC_MAP, 0xFA50)
+    t.write16(REG_INT_MIG, 0)
+
+    t.write32(0xFFF0, 0, 1)
+    t.write32(0xFFF4, 0, 1)
+    t.write8(0xFFF8, 0, 1)
+
+    t.write32(REG_RF_TIMING, 0x00004001)
+
+    t.write16(0xFF72, 0x569A, 2)               # RFSW_CTRL
+
+    t.write16(REG_RFPINSOUTPUT, 0x0480)
+    t.write16(REG_RFPINSSELECT, 0x2488)
+    t.write16(REG_RFPINSENABLE, 0x1FFF)
+    time.sleep(0.100)
+
+    rf_init(t)
+
+    reg = CMD_TX_ENABLE | CMD_RX_ENABLE
+    t.write8(REG_CMD, reg)
+    t.write16(REG_INT_MASK, 0xFFFF)
+
+    t.write8(0xFE41, 0xF4)
+    t.write8(0xFE40, 0x00)
+    t.write8(0xFE42, 0x00)
+    t.write8(0xFE42, 0x01)
+    t.write8(0xFE40, 0x0F)
+    t.write8(0xFE42, 0x00)
+    t.write8(0xFE42, 0x01)
+
+    reg = t.read8(0xFFDB)
+    t.write8(0xFFDB, reg | (1 << 2))
+    t.write16(0xFF72, 0x59FA, 3)
+    t.write16(0xFF74, 0x59D2, 3)
+    t.write16(0xFF76, 0x59D2, 3)
+    t.write16(0xFF78, 0x19FA, 3)
+    t.write16(0xFF7A, 0x19FA, 3)
+    t.write16(0xFF7C, 0x00D0, 3)
+    t.write8(0xFF61, 0)
+    t.write8(0xFF80, 0x0F, 1)
+    t.write8(0xFF83, 0x03, 1)
+    t.write8(0xFFDA, 0x10)
+    t.write8(0xFF4D, 0x08, 2)
+
+    t.write32(REG_HSSI_PARA, 0x0600321B)
+
+    t.write16(0xFFEC, 0x0800, 1)
+
+    t.write8(REG_ACM_CONTROL, 0)
+
+    # ENEDCA flag must always be set, transmit issues?
+    t.write8(REG_MSR, MSR_ENEDCA)
+
+
+def start(t: RTL8187Transport, is_rtl8187b: bool) -> int:
     """Port of rtl8187_start (dev.c:923-1015) — L-branch. Returns the RX_CONF baseline
     written (the kernel's ``priv->rx_conf``), which :func:`configure_filter` then updates.
 
@@ -304,7 +470,36 @@ def start(t: RTL8187Transport) -> int:
     port did) both mis-orders the write and drops the CTRL bit airmon also requests.
 
     Pre-condition: init_hw has already run (chip reset, RF programmed, ANAPARAM ON).
+    The 8187B branch (dev.c:939-971) leaves CMD alone: rtl8187b_init_hw already enabled TX/RX.
     """
+    if is_rtl8187b:
+        rx_conf = (
+            RX_CONF_MGMT
+            | RX_CONF_DATA
+            | RX_CONF_BROADCAST
+            | RX_CONF_NICMAC
+            | RX_CONF_BSSID
+            | (7 << 13)
+            | (7 << 10)
+            | RX_CONF_RX_AUTORESETPHY
+            | RX_CONF_ONLYERLPKT
+        )
+        t.write32(REG_RX_CONF, rx_conf)
+
+        reg = t.read8(REG_TX_AGC_CTL)
+        reg &= ~TX_AGC_CTL_PERPACKET_GAIN
+        reg &= ~TX_AGC_CTL_PERPACKET_ANTSEL
+        reg &= ~TX_AGC_CTL_FEEDBACK_ANT
+        t.write8(REG_TX_AGC_CTL, reg & 0xFF)
+
+        t.write32(REG_TX_CONF,
+                  TX_CONF_HW_SEQNUM
+                  | TX_CONF_DISREQQSIZE
+                  | (RETRY_COUNT << 8)      # short retry limit
+                  | (RETRY_COUNT << 0)      # long retry limit
+                  | (7 << 21))              # MAX TX DMA
+        return rx_conf
+
     t.write16(REG_INT_MASK, 0xFFFF)
 
     # Multicast: accept everything (0xFFFFFFFF in both MAR halves).
@@ -377,7 +572,8 @@ def configure_filter(t: RTL8187Transport, rx_conf: int, changed_flags: int, tota
     return rx_conf, total_flags
 
 
-def stop(t: RTL8187Transport, rf_stop: Callable[[RTL8187Transport], None]) -> None:
+def stop(t: RTL8187Transport, rf_stop: Callable[[RTL8187Transport], None],
+         is_rtl8187b: bool) -> None:
     """Port of rtl8187_stop (dev.c:1022-1053), register side; ``rf_stop`` is priv->rf->stop."""
     t.write16(REG_INT_MASK, 0)
 
@@ -387,7 +583,7 @@ def stop(t: RTL8187Transport, rf_stop: Callable[[RTL8187Transport], None]) -> No
     t.write8(REG_CMD, reg & 0xFF)
 
     rf_stop(t)
-    set_anaparam(t, rfon=False)
+    set_anaparam(t, rfon=False, is_rtl8187b=is_rtl8187b)
 
     t.write8(REG_EEPROM_CMD, EEPROM_CMD_CONFIG)
     reg = t.read8(REG_CONFIG4)
@@ -395,12 +591,14 @@ def stop(t: RTL8187Transport, rf_stop: Callable[[RTL8187Transport], None]) -> No
     t.write8(REG_EEPROM_CMD, EEPROM_CMD_NORMAL)
 
 
-def cold_bring_up(t: RTL8187Transport, rf_init: RFInit) -> int:
-    """Run the cold bring-up init_hw → start → configure_filter (enter monitor), returning
-    the monitor RX_CONF. ``rf_init`` programs the RF synth (without it the receiver is blind).
-    """
-    init_hw(t, rf_init=rf_init)
-    rx_conf = start(t)
+def cold_bring_up(t: RTL8187Transport, rf_init: RFInit, is_rtl8187b: bool) -> int:
+    """rtl8187_start (init_hw or rtl8187b_init_hw, then the start writes), then
+    configure_filter (enter monitor); returns the monitor RX_CONF."""
+    if not is_rtl8187b:
+        init_hw(t, rf_init=rf_init)
+    else:
+        rtl8187b_init_hw(t, rf_init=rf_init)
+    rx_conf = start(t, is_rtl8187b)
     # A monitor vif requests FIF_OTHER_BSS | FIF_CONTROL; nothing was set before.
     monitor_flags = FIF_OTHER_BSS | FIF_CONTROL
     rx_conf, _ = configure_filter(t, rx_conf, monitor_flags, monitor_flags, 0)

@@ -49,6 +49,7 @@ from wifit3.chips.rtl8187.constants import (
     REG_TX_CONF,
     TX_CONF_HWVER_MASK,
     USB_EP_BULK_IN,
+    USB_EP_BULK_OUT,
     USB_PID_RTL8187,
     USB_VID_REALTEK,
 )
@@ -186,7 +187,7 @@ def phase_init(dev, transport: RTL8187Transport) -> None:
     """
     step("Running cold bring-up (init_hw + start, rf.init STUBBED)")
     try:
-        cold_bring_up(transport, rf_init=lambda _t: None)
+        cold_bring_up(transport, rf_init=lambda _t: None, is_rtl8187b=False)
     except (IOError, usb.core.USBError) as e:
         fail(f"cold_bring_up raised: {type(e).__name__}: {e}")
     ok("cold_bring_up completed without IOError")
@@ -242,7 +243,7 @@ def phase_rf(dev, transport: RTL8187Transport) -> None:
     should now produce frames on whatever the chip's default channel
     happens to be after init (typically channel 1)."""
     step("Probe (93cx6 EEPROM MAC + TX power, asic_rev, HWVER, RF variant)")
-    pr = probe(transport)
+    pr = probe(transport, USB_PID_RTL8187, False)
     print(f"  mac        = {pr.mac.hex(':')}")
     print(f"  asic_rev   = {pr.setup.asic_rev}  "
           f"({'8051 fast' if pr.setup.asic_rev else 'bitbang'} SPI)")
@@ -256,7 +257,7 @@ def phase_rf(dev, transport: RTL8187Transport) -> None:
     t0 = _t.perf_counter()
     try:
         from wifit3.chips.rtl8187.mac import cold_bring_up as _cold
-        _cold(transport, rf_init)
+        _cold(transport, rf_init, pr.chip.is_rtl8187b)
     except (IOError, usb.core.USBError) as e:
         fail(f"cold_bring_up (RF) raised: {type(e).__name__}: {e}")
     dt = _t.perf_counter() - t0
@@ -321,7 +322,7 @@ def phase_rx(dev, transport: RTL8187Transport) -> None:
         if buf is None:
             continue
         n_urbs += 1
-        rx = parse_rx_urb(buf)
+        rx = parse_rx_urb(buf, False)
         if rx is None:
             raw_drops += 1
             continue
@@ -372,12 +373,12 @@ def phase_channel(dev, transport: RTL8187Transport) -> None:
     beacons + unique BSSIDs per channel. Beacons-per-channel sanity-
     checks that the synth tune is actually moving the radio."""
     # cold_bring_up.
-    pr = probe(transport)
+    pr = probe(transport, USB_PID_RTL8187, False)
     setup = pr.setup
     rf_init = build_rf_init(transport, setup, pr.power)
     from wifit3.chips.rtl8187.mac import cold_bring_up as _cold
     step("cold_bring_up (init_hw + RF init + start)")
-    _cold(transport, rf_init)
+    _cold(transport, rf_init, pr.chip.is_rtl8187b)
     cmd = transport.read8(REG_CMD)
     if not (cmd & CMD_TX_ENABLE and cmd & CMD_RX_ENABLE):
         fail(f"CMD did not latch TX|RX enable after bring-up (CMD=0x{cmd:02x}).")
@@ -393,7 +394,7 @@ def phase_channel(dev, transport: RTL8187Transport) -> None:
     for ch in channels:
         step(f"Tune to channel {ch}, sample 2s")
         t0 = _t.perf_counter()
-        config_channel(transport, setup.asic_rev, setup.variant, ch, pr.power)
+        config_channel(transport, setup, ch, pr.power)
         # Drain any stale URBs from the previous channel before sampling.
         for _ in range(8):
             if read_rx_burst(dev, ep, timeout_ms=30) is None:
@@ -409,7 +410,7 @@ def phase_channel(dev, transport: RTL8187Transport) -> None:
             buf = read_rx_burst(dev, ep, timeout_ms=100)
             if buf is None:
                 continue
-            rx = parse_rx_urb(buf)
+            rx = parse_rx_urb(buf, False)
             if rx is None or rx.has_fcs_error:
                 continue
             parsed = WlanFrameParser.parse_80211_frame(rx.mpdu, rx.rssi_dbm)
@@ -460,13 +461,13 @@ def phase_tx(dev, transport: RTL8187Transport) -> None:
     fire a burst of broadcast deauths spoofed from that BSSID. Watch
     bulk-IN to see whether our own frames bounce back (the chip's RX
     path often delivers self-TX'd frames in monitor mode)."""
-    pr = probe(transport)
+    pr = probe(transport, USB_PID_RTL8187, False)
     setup = pr.setup
     rf_init = build_rf_init(transport, setup, pr.power)
     from wifit3.chips.rtl8187.mac import cold_bring_up as _cold
     step("cold_bring_up + tune to channel 11")
-    _cold(transport, rf_init)
-    config_channel(transport, setup.asic_rev, setup.variant, 11, pr.power)
+    _cold(transport, rf_init, pr.chip.is_rtl8187b)
+    config_channel(transport, setup, 11, pr.power)
     ok("ready on ch 11")
 
     eps = probe_endpoints(dev)
@@ -483,7 +484,7 @@ def phase_tx(dev, transport: RTL8187Transport) -> None:
         buf = read_rx_burst(dev, ep_in, timeout_ms=100)
         if buf is None:
             continue
-        rx = parse_rx_urb(buf)
+        rx = parse_rx_urb(buf, False)
         if rx is None or rx.has_fcs_error:
             continue
         parsed = WlanFrameParser.parse_80211_frame(rx.mpdu, rx.rssi_dbm)
@@ -525,7 +526,7 @@ def phase_tx(dev, transport: RTL8187Transport) -> None:
 
     for i in range(20):
         try:
-            inject_frame(dev, deauth, max_packet_size)
+            inject_frame(dev, deauth, {USB_EP_BULK_OUT: max_packet_size}, False)
             n_sent += 1
         except usb.core.USBError as e:
             n_errs += 1
@@ -537,7 +538,7 @@ def phase_tx(dev, transport: RTL8187Transport) -> None:
             buf = read_rx_burst(dev, ep_in, timeout_ms=20)
             if buf is None:
                 continue
-            rx = parse_rx_urb(buf)
+            rx = parse_rx_urb(buf, False)
             if rx is None or rx.has_fcs_error:
                 continue
             # Is this our own deauth bouncing back?
@@ -578,13 +579,13 @@ def phase_handshake(dev, transport: RTL8187Transport, channel: int, seconds: flo
     Useful for sanity-checking handshake capture against a known AP+
     client pair you can trigger a reconnect on.
     """
-    pr = probe(transport)
+    pr = probe(transport, USB_PID_RTL8187, False)
     setup = pr.setup
     rf_init = build_rf_init(transport, setup, pr.power)
     from wifit3.chips.rtl8187.mac import cold_bring_up as _cold
     step(f"cold_bring_up + tune to channel {channel}")
-    _cold(transport, rf_init)
-    config_channel(transport, setup.asic_rev, setup.variant, channel, pr.power)
+    _cold(transport, rf_init, pr.chip.is_rtl8187b)
+    config_channel(transport, setup, channel, pr.power)
     ok(f"listening on ch {channel} for {seconds:.0f}s")
 
     eps = probe_endpoints(dev)
@@ -600,7 +601,7 @@ def phase_handshake(dev, transport: RTL8187Transport, channel: int, seconds: flo
         buf = read_rx_burst(dev, ep, timeout_ms=100)
         if buf is None:
             continue
-        rx = parse_rx_urb(buf)
+        rx = parse_rx_urb(buf, False)
         if rx is None or rx.has_fcs_error:
             continue
         parsed = WlanFrameParser.parse_80211_frame(rx.mpdu, rx.rssi_dbm)
