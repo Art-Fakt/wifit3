@@ -10,6 +10,8 @@ init's channel-1 refresh and each channel tune).
 """
 from __future__ import annotations
 
+import logging
+import os
 from dataclasses import dataclass
 
 from .constants import (
@@ -30,6 +32,8 @@ from .rfkill import is_radio_enabled
 from .rtl8225 import RfSetup, TxPower, detect_rf
 from .transport import RTL8187Transport
 
+logger = logging.getLogger(__name__)
+
 # LED customer-ID EEPROM word (read for rtl8187_leds_init; we don't drive the LEDs, but the
 # read is on the wire when CONFIG_RTL8187_LEDS is built in, as it is on the Kali kernel).
 EEPROM_LED_CUSTID = 0x3F
@@ -41,6 +45,20 @@ class ProbeResult:
     chip: ChipVariant
     setup: RfSetup          # asic_rev + RF variant (for set_channel dispatch)
     power: TxPower          # per-channel hw_value + txpwr_base (for set_tx_power)
+    rfkill_off: bool        # priv->rfkill_off: True when the radio switch is ON (rfkill.c:35)
+
+
+def is_valid_ether_addr(addr: bytes) -> bool:
+    """[SRC] include/linux/etherdevice.h: not multicast and not all zeros."""
+    return not (addr[0] & 0x01) and any(addr)
+
+
+def eth_random_addr() -> bytes:
+    """[SRC] include/linux/etherdevice.h: random, unicast, locally administered."""
+    addr = bytearray(os.urandom(6))
+    addr[0] &= 0xFE
+    addr[0] |= 0x02
+    return bytes(addr)
 
 
 def probe(t: RTL8187Transport) -> ProbeResult:
@@ -58,6 +76,9 @@ def probe(t: RTL8187Transport) -> ProbeResult:
 
     mac_words = ee.multiread(EEPROM_MAC_ADDR, 3)             # 3 LE words → 6 MAC bytes
     mac = bytes(b for w in mac_words for b in (w & 0xFF, w >> 8))
+    if not is_valid_ether_addr(mac):                         # dev.c:1506-1510
+        logger.warning("rtl8187: Invalid hwaddr! Using randomly generated MAC address")
+        mac = eth_random_addr()
 
     hw: list[int] = []
     for i in range(3):                                      # channels 1..6 (3 words)
@@ -77,18 +98,25 @@ def probe(t: RTL8187Transport) -> ProbeResult:
 
     chip = detect_chip_variant(t)                          # HWVER read (TX_CONF[27:25])
 
-    for i in range(2):                                     # channels 11..14 (2 words)
-        w = ee.read(EEPROM_TXPWR_CHAN_6 + i)
+    if not chip.is_rtl8187b:
+        for i in range(2):                                 # channels 11..14 (2 words)
+            w = ee.read(EEPROM_TXPWR_CHAN_6 + i)
+            hw += [w & 0xFF, w >> 8]
+    else:                                                  # dev.c:1592-1601
+        hw.append(ee.read(EEPROM_TXPWR_CHAN_6) & 0xFF)     # channel 11
+        hw.append(ee.read(0x0A) & 0xFF)                    # channel 12
+        w = ee.read(0x1C)                                  # channels 13..14
         hw += [w & 0xFF, w >> 8]
 
-    variant = detect_rf(t, asic_rev)                       # RF reg 0/8/9 SPI probe
+    variant = detect_rf(t, asic_rev, chip.is_rtl8187b)     # RF reg 0/8/9 SPI probe (L only)
 
     ee.read(EEPROM_LED_CUSTID)                              # LED customer-ID (read only)
-    is_radio_enabled(t)                                    # rfkill_init poll
+    rfkill_off = is_radio_enabled(t)                       # rtl8187_rfkill_init
 
     return ProbeResult(
         mac=mac,
         chip=chip,
         setup=RfSetup(asic_rev=asic_rev, variant=variant),
         power=TxPower(hw_value=tuple(hw), base=base),
+        rfkill_off=rfkill_off,
     )

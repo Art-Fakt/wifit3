@@ -25,6 +25,7 @@ USB_PID_RTL8187 = 0x8187  # AWUS036H + many other 8187L dongles
 
 # Endpoints on the 8187L (verified against AWUS036H).
 USB_EP_BULK_IN = 0x81
+USB_EP_BULK_IN_8187B = 0x83       # usb_rcvbulkpipe(.., is_rtl8187b ? 3 : 1), dev.c:435
 USB_EP_BULK_OUT = 0x02
 
 # ----------------------------------------------------------------------
@@ -202,6 +203,12 @@ RX_CONF_CSDM1 = 1 << 29
 RX_CONF_CSDM2 = 1 << 30
 RX_CONF_ONLYERLPKT = 1 << 31
 
+# mac80211 enum ieee80211_filter_flags  [SRC] include/net/mac80211.h
+FIF_ALLMULTI = 1 << 1
+FIF_FCSFAIL = 1 << 2
+FIF_CONTROL = 1 << 5
+FIF_OTHER_BSS = 1 << 6
+
 # ----------------------------------------------------------------------
 # TX_CONF bits  [SRC] rtl818x.h:136-152
 # ----------------------------------------------------------------------
@@ -234,6 +241,11 @@ HWVER_CHIP_NAMES = {
     TX_CONF_R8187vD_B: "RTL8187BvB(early)",
 }
 HWVER_DEFAULT_NAME = "RTL8187vB"
+
+# priv->hw_rev  [SRC] rtl8187.h:129-133
+RTL8187BvB = 0
+RTL8187BvD = 1
+RTL8187BvE = 2
 
 # ----------------------------------------------------------------------
 # EEPROM byte offsets within the 93cx6  [SRC] rtl8187.h:20-25

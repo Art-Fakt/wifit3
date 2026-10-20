@@ -44,6 +44,7 @@ from wifit3.chips.rtl8187.constants import (
     CMD_RX_ENABLE,
     CMD_TX_ENABLE,
     REG_CMD,
+    REG_MAC0,
     REG_RX_CONF,
     REG_TX_CONF,
     TX_CONF_HWVER_MASK,
@@ -55,7 +56,6 @@ from wifit3.chips.rtl8187.mac import (
     cold_bring_up,
     detect_chip_variant,
     is_chip_warm,
-    read_perm_mac,
 )
 from wifit3.chips.rtl8187.chan import config_channel
 from wifit3.chips.rtl8187.probe import probe
@@ -64,6 +64,7 @@ from wifit3.chips.rtl8187.tx import (
     RATE_1MBPS_CCK,
     build_deauth,
     build_tx_hdr,
+    bulk_out_max_packet_size,
     inject_frame,
 )
 from wifit3.chips.rtl8187.rtl8225 import build_rf_init
@@ -132,7 +133,7 @@ def open_device():
 
 def phase_open(transport: RTL8187Transport) -> None:
     step("Read MAC@0xFF00 (6 bytes)")
-    mac_bytes = read_perm_mac(transport)
+    mac_bytes = transport.read_bytes(REG_MAC0, 6)
     mac_str = ":".join(f"{b:02x}" for b in mac_bytes)
     print(f"  MAC0..5 = {mac_str}")
     if mac_bytes == b"\xff" * 6:
@@ -153,7 +154,7 @@ def phase_open(transport: RTL8187Transport) -> None:
     print(f"  HWVER    = 0x{hwver:08x}  (bits [27:25] = {hwver >> 25})")
     variant = detect_chip_variant(transport)
     print(f"  chip     = {variant.name}")
-    if variant.is_8187b_masquerade:
+    if variant.is_rtl8187b:
         print(
             "  WARNING: this is actually an early RTL8187B in 0x8187-disguise. "
             "M1-M6 are scoped to 8187L only."
@@ -185,7 +186,7 @@ def phase_init(dev, transport: RTL8187Transport) -> None:
     """
     step("Running cold bring-up (init_hw + start, rf.init STUBBED)")
     try:
-        cold_bring_up(transport)
+        cold_bring_up(transport, rf_init=lambda _t: None)
     except (IOError, usb.core.USBError) as e:
         fail(f"cold_bring_up raised: {type(e).__name__}: {e}")
     ok("cold_bring_up completed without IOError")
@@ -470,6 +471,7 @@ def phase_tx(dev, transport: RTL8187Transport) -> None:
 
     eps = probe_endpoints(dev)
     ep_in = eps.primary_bulk_in
+    max_packet_size = bulk_out_max_packet_size(dev)
 
     step("Sample 1.5s on ch 11 to pick the strongest beacon BSSID")
     import time as _t
@@ -523,7 +525,7 @@ def phase_tx(dev, transport: RTL8187Transport) -> None:
 
     for i in range(20):
         try:
-            inject_frame(dev, deauth)
+            inject_frame(dev, deauth, max_packet_size)
             n_sent += 1
         except usb.core.USBError as e:
             n_errs += 1

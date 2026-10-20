@@ -42,18 +42,25 @@ from wifit3.errors import BringUpError, BringUpPermissionsError
 from wifit3.dot11.parser import WlanFrameParser
 
 from .chan import config_channel as _config_channel
-from .constants import REG_CMD, CMD_RX_ENABLE, CMD_TX_ENABLE
+from .constants import (
+    CMD_RX_ENABLE,
+    CMD_TX_ENABLE,
+    REG_CMD,
+    USB_EP_BULK_IN,
+    USB_EP_BULK_IN_8187B,
+)
 from .mac import (
     ChipVariant,
     cold_bring_up,
     is_chip_warm,
+    stop,
 )
 from .probe import probe
-from .rtl8225 import RfSetup, TxPower, build_rf_init
-from .rx import parse_rx_urb, probe_endpoints, read_rx_burst
+from .rtl8225 import RfSetup, TxPower, build_rf_init, rtl8225_rf_stop
+from .rx import parse_rx_urb, read_rx_burst
 from ..rx_reader import RxReaderThread
 from .transport import RTL8187Transport
-from .tx import inject_frame as _tx_inject, stamp_seq_ctrl
+from .tx import bulk_out_max_packet_size, inject_frame as _tx_inject, stamp_seq_ctrl
 
 logger = logging.getLogger(__name__)
 
@@ -66,8 +73,7 @@ class RTL8187Driver(Driver):
     driver — see module docstring for the milestone breakdown.
     """
 
-    # 2.4 GHz channels 1..14. Ch14 is JP-only (CCK/11b) but the chip tunes it
-    # (rtl818x_channels[13].center_freq=2484) and the ch14 CCK power table is wired.
+    # rtl818x_channels: 2.4 GHz 1..14 (ch14 = 2484 MHz, its own CCK power table).
     SUPPORTED_CHANNELS = list(range(1, 15))
     # FIXED_MAC: the 8187L auto-ACKs its own silicon MAC in monitor mode (bench 2026-07-16:
     # 111 ACKs / 100 injects to the silicon MAC), but has no active monitor to program a
@@ -86,10 +92,12 @@ class RTL8187Driver(Driver):
         self._on_lost: Optional[Callable[[Exception], None]] = None
         self._rx_reader: Optional[RxReaderThread] = None
         self._bulk_in_ep: Optional[int] = None
+        self._bulk_out_max_packet_size: Optional[int] = None
         self._claimed = False
         self._rf_setup: Optional[RfSetup] = None
         self._power: Optional[TxPower] = None
         self._rx_conf: int = 0
+        self._started = False
         # 802.11 TX sequence counter (bits [4:15], so it steps by 0x10). The 8187L has no
         # hardware seq assignment on the L-path, so we stamp it ourselves per injected
         # frame — see tx.stamp_seq_ctrl. Updated on the event loop only (no lock needed).
@@ -98,7 +106,7 @@ class RTL8187Driver(Driver):
         # Driver Protocol surface area.
         self.mac_address: Optional[str] = None
         self.is_warm: bool = False
-        self.current_channel: int = 1
+        self.current_channel: Optional[int] = None
         self.chip_variant: Optional[ChipVariant] = None
 
     # ---- discovery hook ---------------------------------------------------
@@ -182,16 +190,16 @@ class RTL8187Driver(Driver):
                 "probe: mac=%s, chip=%s, asic_rev=%d, rf=%s",
                 self.mac_address, pr.chip.name, pr.setup.asic_rev, pr.setup.variant.value,
             )
-            if self.chip_variant.is_8187b_masquerade:
-                logger.error(
-                    "RTL8187B in 0x8187 disguise — this driver is 8187L only. "
-                    "Bring-up aborted."
-                )
-                return False
+            if not pr.rfkill_off:
+                raise BringUpError("rfkill", "hardware radio switch reads OFF")
+            if self.chip_variant.is_rtl8187b:
+                raise BringUpError(
+                    "probe", f"{pr.chip.name} silicon: the RTL8187B bring-up is not ported yet")
 
-            _progress(0.35, "Probing endpoints + warm/cold state")
-            eps = probe_endpoints(self.dev)
-            self._bulk_in_ep = eps.primary_bulk_in
+            _progress(0.35, "Probing warm/cold state")
+            self._bulk_in_ep = (USB_EP_BULK_IN_8187B if self.chip_variant.is_rtl8187b
+                                else USB_EP_BULK_IN)
+            self._bulk_out_max_packet_size = bulk_out_max_packet_size(self.dev)
             warm = await loop.run_in_executor(None, is_chip_warm, self.transport)
 
             # ALWAYS run the full cold bring-up — no warm shortcut on this chip. The
@@ -211,6 +219,13 @@ class RTL8187Driver(Driver):
             self._rx_conf = await loop.run_in_executor(
                 None, cold_bring_up, self.transport, rf_init
             )
+            self._started = True
+            # mac80211's first rtl8187_config (dev.c:1155) tunes the band's first channel.
+            await loop.run_in_executor(
+                None, _config_channel, self.transport, self._rf_setup.asic_rev,
+                self._rf_setup.variant, 1, self._power,
+            )
+            self.current_channel = 1
 
             # Verify CMD latched TX_ENABLE | RX_ENABLE (warm re-arm or cold start).
             cmd = await loop.run_in_executor(None, self.transport.read8, REG_CMD)
@@ -315,11 +330,15 @@ class RTL8187Driver(Driver):
         """Build tx_hdr + bulk-OUT ``frame_bytes`` once, over EP 0x02, with the chip's HW ACK-retry
         limit set to ``RETRY_COUNT`` (7). The 802.11 sequence number is already stamped
         by ``_stamp_tx_seq``."""
+        max_packet_size = self._bulk_out_max_packet_size
+        if max_packet_size is None:
+            logger.error("RTL8187 inject_frame: connect() must run first")
+            return False
         loop = asyncio.get_event_loop()
         try:
             await loop.run_in_executor(
                 None,
-                lambda: _tx_inject(self.dev, frame_bytes),
+                lambda: _tx_inject(self.dev, frame_bytes, max_packet_size),
             )
         except usb.core.USBError as e:
             logger.error("RTL8187 inject_frame USBError: %s", e)
@@ -340,6 +359,15 @@ class RTL8187Driver(Driver):
         return bytes(buf)
 
     async def close(self) -> None:
+        """rtl8187_stop: register writes first, then the RX URBs die (dev.c:1047)."""
+        if self._started and self._rf_setup is not None:
+            asic_rev = self._rf_setup.asic_rev
+            try:
+                await asyncio.get_event_loop().run_in_executor(
+                    None, stop, self.transport, lambda t: rtl8225_rf_stop(t, asic_rev))
+            except (IOError, usb.core.USBError) as e:
+                logger.debug("RTL8187 stop on close ignored: %s", e)
+            self._started = False
         if self._rx_reader is not None:
             await self._rx_reader.stop()
             self._rx_reader = None

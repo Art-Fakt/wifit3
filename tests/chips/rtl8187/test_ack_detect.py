@@ -31,6 +31,7 @@ def _mgmt_frame(ta: bytes = bytes.fromhex("020000000001")) -> bytes:
 
 def _driver() -> RTL8187Driver:
     d = RTL8187Driver(MagicMock())
+    d._bulk_out_max_packet_size = 512
     d._parsed = []
     d.register_rx_callback(d._parsed.append)
     return d

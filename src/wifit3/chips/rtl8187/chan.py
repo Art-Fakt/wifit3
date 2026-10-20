@@ -34,9 +34,7 @@ from .transport import RTL8187Transport
 
 logger = logging.getLogger(__name__)
 
-# Channels 1..14 (2.4 GHz only). Channel 14 is JP-only and uses a
-# different CCK power table — supported by the kernel set_chan but kept
-# off the default hop list (see RTL8187Driver.SUPPORTED_CHANNELS).
+# rtl818x_channels: 1..14 (2.4 GHz). Channel 14 uses its own CCK power table.
 VALID_CHANNELS = tuple(range(1, 15))
 
 

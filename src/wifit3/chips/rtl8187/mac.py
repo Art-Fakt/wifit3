@@ -1,19 +1,14 @@
 """RTL8187L MAC-layer bring-up + warm/cold helpers.
 
-Mirrors ``rtl8187_{set_anaparam,cmd_reset,init_hw,start}`` from
+Mirrors ``rtl8187_{set_anaparam,cmd_reset,init_hw,start,stop}`` from
 ``driver_sources/rtl818x-source-v6.18/rtl8187/dev.c``.
-
-The RF init step inside ``init_hw`` (``priv->rf->init(dev)``) is stubbed
-in this milestone and ported in M2b — without it the chip's MAC comes
-fully online but the receiver is blind because the synthesizer hasn't
-been programmed.
 """
 from __future__ import annotations
 
 import logging
 import time
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Optional
 
 from .constants import (
     ANAPARAM_OFF,
@@ -24,9 +19,14 @@ from .constants import (
     CMD_RX_ENABLE,
     CMD_TX_ENABLE,
     CONFIG3_ANAPARAM_WRITE,
+    CONFIG4_VCOOFF,
     EEPROM_CMD_CONFIG,
     EEPROM_CMD_LOAD,
     EEPROM_CMD_NORMAL,
+    FIF_ALLMULTI,
+    FIF_CONTROL,
+    FIF_FCSFAIL,
+    FIF_OTHER_BSS,
     HWVER_CHIP_NAMES,
     HWVER_DEFAULT_NAME,
     REG_ANAPARAM,
@@ -35,13 +35,13 @@ from .constants import (
     REG_CMD,
     REG_CONFIG1,
     REG_CONFIG3,
+    REG_CONFIG4,
     REG_CW_CONF,
     REG_EEPROM_CMD,
     REG_GP_ENABLE,
     REG_GPIO0,
     REG_INT_MASK,
     REG_INT_TIMEOUT,
-    REG_MAC0,
     REG_MAGIC_FE18,
     REG_MAGIC_FE53,
     REG_MAGIC_FFF4,
@@ -60,10 +60,12 @@ from .constants import (
     REG_TX_AGC_CTL,
     REG_TX_CONF,
     REG_WPA_CONF,
+    RTL8187BvB,
     RX_CONF_BROADCAST,
     RX_CONF_BSSID,
     RX_CONF_CTRL,
     RX_CONF_DATA,
+    RX_CONF_FCS,
     RX_CONF_MGMT,
     RX_CONF_MONITOR,
     RX_CONF_NICMAC,
@@ -86,7 +88,8 @@ logger = logging.getLogger(__name__)
 class ChipVariant:
     hwver_raw: int
     name: str
-    is_8187b_masquerade: bool
+    is_rtl8187b: bool
+    hw_rev: Optional[int]    # priv->hw_rev; None on 8187L silicon
 
 
 def detect_chip_variant(t: RTL8187Transport) -> ChipVariant:
@@ -97,22 +100,9 @@ def detect_chip_variant(t: RTL8187Transport) -> ChipVariant:
     tx_conf = t.read32(REG_TX_CONF)
     hwver = tx_conf & TX_CONF_HWVER_MASK
     name = HWVER_CHIP_NAMES.get(hwver, HWVER_DEFAULT_NAME)
-    return ChipVariant(
-        hwver_raw=hwver,
-        name=name,
-        is_8187b_masquerade=(hwver == TX_CONF_R8187vD_B),
-    )
-
-
-def read_perm_mac(t: RTL8187Transport) -> bytes:
-    """Read the 6-byte permanent MAC from MAC0/MAC4.
-
-    On the 8187L the EEPROM is auto-loaded into MAC0..5 on USB
-    enumeration, so this returns the real MAC straight from a cold
-    plug (verified against M1 hw-test ground truth: the AWUS036H's
-    factory ALFA MAC ``00:c0:ca:xx:xx:xx`` reads back immediately).
-    """
-    return t.read_bytes(REG_MAC0, 6)
+    if hwver == TX_CONF_R8187vD_B:      # early 8187B behind the 0x8187 PID (dev.c:1544-1550)
+        return ChipVariant(hwver_raw=hwver, name=name, is_rtl8187b=True, hw_rev=RTL8187BvB)
+    return ChipVariant(hwver_raw=hwver, name=name, is_rtl8187b=False, hw_rev=None)
 
 
 def is_chip_warm(t: RTL8187Transport) -> bool:
@@ -129,16 +119,8 @@ def is_chip_warm(t: RTL8187Transport) -> bool:
 # ----------------------------------------------------------------------
 # Bring-up: set_anaparam, cmd_reset, init_hw, start  (M2a)
 # ----------------------------------------------------------------------
-# Stub type for the RF-init callback. M2b will provide a real
-# implementation backed by rtl8225_rf_init / rtl8225z2_rf_init.
+# priv->rf->init; rtl8225.build_rf_init returns the one for the probed RF.
 RFInit = Callable[[RTL8187Transport], None]
-
-
-def _stub_rf_init(t: RTL8187Transport) -> None:
-    """Placeholder for priv->rf->init(dev). Replaced by the real rtl8225
-    RF init in M2b. With this no-op the MAC comes fully online but the
-    RF synth is unprogrammed → bulk-IN may stay silent until M2b lands."""
-    logger.warning("rf.init() stub — receiver will be blind until M2b ports rtl8225_rf_init")
 
 
 def set_anaparam(t: RTL8187Transport, rfon: bool) -> None:
@@ -198,7 +180,7 @@ def cmd_reset(t: RTL8187Transport) -> None:
         raise IOError("rtl8187 cmd_reset: EEPROM_CMD_CONFIG never cleared (timeout)")
 
 
-def init_hw(t: RTL8187Transport, rf_init: RFInit = _stub_rf_init) -> None:
+def init_hw(t: RTL8187Transport, rf_init: RFInit) -> None:
     """Port of rtl8187_init_hw (dev.c:653-737) — L-branch.
 
     Steps in order (each comment is the corresponding kernel line range):
@@ -220,7 +202,7 @@ def init_hw(t: RTL8187Transport, rf_init: RFInit = _stub_rf_init) -> None:
                CONFIG3=0x44 (bracketed by EEPROM CONFIG/NORMAL),
                RFPinsEnable=0x1FF7
       724      msleep(100)
-      726      priv->rf->init(dev)            [stubbed in M2a; ported M2b]
+      726      priv->rf->init(dev)
       728-734  BRSR=0x01F3 + PGSELECT page-1 magic regs (0xFFFE=0x10,
                TALLY_SEL=0x80, 0xFFFF=0x60) bracketed by PGSELECT reg
     """
@@ -293,7 +275,7 @@ def init_hw(t: RTL8187Transport, rf_init: RFInit = _stub_rf_init) -> None:
 
     time.sleep(0.100)
 
-    # ---- RF init (stubbed in M2a, real in M2b) -------------------------------
+    # ---- RF init -------------------------------------------------------------
     rf_init(t)
 
     # ---- post-RF init: BRSR + page-1 magic regs ------------------------------
@@ -309,8 +291,7 @@ def init_hw(t: RTL8187Transport, rf_init: RFInit = _stub_rf_init) -> None:
 
 def start(t: RTL8187Transport) -> int:
     """Port of rtl8187_start (dev.c:923-1015) — L-branch. Returns the RX_CONF baseline
-    written (the kernel's ``priv->rx_conf``), which :func:`configure_filter` then ORs the
-    monitor flags into.
+    written (the kernel's ``priv->rx_conf``), which :func:`configure_filter` then updates.
 
     Enables interrupts, opens multicast filters, writes the station-mode RX_CONF baseline
     (BSSID-filtered — *no* monitor bit, exactly as the kernel does), clears the per-packet
@@ -370,25 +351,57 @@ def start(t: RTL8187Transport) -> int:
     return rx_conf
 
 
-def configure_filter(t: RTL8187Transport, rx_conf: int) -> int:
-    """Enter monitor mode by ORing MONITOR + CTRL into the RX_CONF baseline and writing it.
+def configure_filter(t: RTL8187Transport, rx_conf: int, changed_flags: int, total_flags: int,
+                     multicast: int) -> tuple[int, int]:
+    """Port of rtl8187_configure_filter (dev.c:1310-1339). Returns the new
+    (``priv->rx_conf``, ``*total_flags``); mac80211 passes ``changed_flags`` = last total ^ new."""
+    if changed_flags & FIF_FCSFAIL:
+        rx_conf ^= RX_CONF_FCS
+    if changed_flags & FIF_CONTROL:
+        rx_conf ^= RX_CONF_CTRL
+    if total_flags & FIF_OTHER_BSS or total_flags & FIF_ALLMULTI or multicast > 0:
+        rx_conf |= RX_CONF_MONITOR
+    else:
+        rx_conf &= ~RX_CONF_MONITOR
 
-    Port of rtl8187_configure_filter (dev.c:1310-1339) for the airmon request set: monitor
-    mode asks for FIF_OTHER_BSS (→ RX_CONF_MONITOR, accept all BSSIDs incl. client→AP ToDS
-    EAPOL) and FIF_CONTROL (→ RX_CONF_CTRL, accept RTS/CTS/ACK). The kernel writes this with
-    ``iowrite32_async``; mac80211 reapplies it on each channel change, so the same value is
-    rewritten on every hop. Returns the new ``priv->rx_conf``. [[passive_by_default]] — RX
-    posture only; no TX. See [[feedback_station_vs_monitor_rcr]].
-    """
-    rx_conf |= RX_CONF_MONITOR | RX_CONF_CTRL
+    total_flags = 0
+    if rx_conf & RX_CONF_FCS:
+        total_flags |= FIF_FCSFAIL
+    if rx_conf & RX_CONF_CTRL:
+        total_flags |= FIF_CONTROL
+    if rx_conf & RX_CONF_MONITOR:
+        total_flags |= FIF_OTHER_BSS
+        total_flags |= FIF_ALLMULTI
+
     t.write32(REG_RX_CONF, rx_conf)
-    return rx_conf
+    return rx_conf, total_flags
 
 
-def cold_bring_up(t: RTL8187Transport, rf_init: RFInit = _stub_rf_init) -> int:
+def stop(t: RTL8187Transport, rf_stop: Callable[[RTL8187Transport], None]) -> None:
+    """Port of rtl8187_stop (dev.c:1022-1053), register side; ``rf_stop`` is priv->rf->stop."""
+    t.write16(REG_INT_MASK, 0)
+
+    reg = t.read8(REG_CMD)
+    reg &= ~CMD_TX_ENABLE
+    reg &= ~CMD_RX_ENABLE
+    t.write8(REG_CMD, reg & 0xFF)
+
+    rf_stop(t)
+    set_anaparam(t, rfon=False)
+
+    t.write8(REG_EEPROM_CMD, EEPROM_CMD_CONFIG)
+    reg = t.read8(REG_CONFIG4)
+    t.write8(REG_CONFIG4, reg | CONFIG4_VCOOFF)
+    t.write8(REG_EEPROM_CMD, EEPROM_CMD_NORMAL)
+
+
+def cold_bring_up(t: RTL8187Transport, rf_init: RFInit) -> int:
     """Run the cold bring-up init_hw → start → configure_filter (enter monitor), returning
     the monitor RX_CONF. ``rf_init`` programs the RF synth (without it the receiver is blind).
     """
     init_hw(t, rf_init=rf_init)
     rx_conf = start(t)
-    return configure_filter(t, rx_conf)
+    # A monitor vif requests FIF_OTHER_BSS | FIF_CONTROL; nothing was set before.
+    monitor_flags = FIF_OTHER_BSS | FIF_CONTROL
+    rx_conf, _ = configure_filter(t, rx_conf, monitor_flags, monitor_flags, 0)
+    return rx_conf

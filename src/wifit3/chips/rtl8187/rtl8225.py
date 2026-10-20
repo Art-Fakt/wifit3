@@ -61,6 +61,7 @@ logger = logging.getLogger(__name__)
 class RfVariant(str, Enum):
     RTL8225 = "rtl8225"      # BCD revision (M2b ported)
     RTL8225Z2 = "rtl8225z2"  # z2 revision (M2c — not yet)
+    RTL8225Z2_B = "rtl8225z2_b"  # rtl8225z2_b_ops, 8187B only
 
 
 # ----------------------------------------------------------------------
@@ -301,16 +302,23 @@ def rtl8225_read(t: RTL8187Transport, addr: int) -> int:
     return out
 
 
+def rtl8225_rf_stop(t: RTL8187Transport, asic_rev: int) -> None:
+    """[SRC] rtl8225.c:981-984; the stop op of all three rf_ops."""
+    rtl8225_write(t, 0x4, 0x1F, asic_rev)
+
+
 # ----------------------------------------------------------------------
 # detect_rf — picks BCD vs z2 by reading RF regs 8 & 9.
 # [SRC] rtl8225.c:1025-1044
 # ----------------------------------------------------------------------
-def detect_rf(t: RTL8187Transport, asic_rev: int) -> RfVariant:
+def detect_rf(t: RTL8187Transport, asic_rev: int, is_rtl8187b: bool) -> RfVariant:
     """Probe the external RF chip to discriminate BCD vs z2.
 
     The kernel writes RF reg 0 = 0x1B7, then reads RF regs 8 and 9. z2
-    silicon reads back 0x588 / 0x700; anything else is BCD.
+    silicon reads back 0x588 / 0x700; anything else is BCD. 8187B skips the probe.
     """
+    if is_rtl8187b:
+        return RfVariant.RTL8225Z2_B
     rtl8225_write(t, 0, 0x1B7, asic_rev)
     reg8 = rtl8225_read(t, 8)
     reg9 = rtl8225_read(t, 9)
@@ -737,7 +745,7 @@ def rtl8225z2_rf_set_tx_power(
         ofdm_power = 25
     else:
         ofdm_power += 10
-    ofdm_power += txpwr_base >> 4
+    ofdm_power = (ofdm_power + (txpwr_base >> 4)) & 0xFF     # u8 ofdm_power (rtl8225.c:637)
     ofdm_power = min(ofdm_power, 35)
 
     if channel == 14:

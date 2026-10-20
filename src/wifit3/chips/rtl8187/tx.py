@@ -27,6 +27,7 @@ import logging
 import struct
 
 import usb.core
+import usb.util
 
 from .constants import (
     RETRY_COUNT,
@@ -37,14 +38,6 @@ from .constants import (
 logger = logging.getLogger(__name__)
 
 TX_HDR_SIZE = 12
-
-# High-speed bulk-OUT max packet size (EP 0x02 wMaxPacketSize on the AWUS036H). The
-# kernel sets URB_ZERO_PACKET on every TX URB (dev.c:315); libusb only *appends* the
-# terminating zero-length packet when the transfer is an exact multiple of this — so a
-# frame whose total length is a 512-multiple would otherwise never signal end-of-transfer
-# and the chip would stall instead of transmitting. PyUSB's dev.write does NOT do this, so
-# we replicate it explicitly.
-USB_BULK_MAXPACKET = 512
 
 # 802.11 broadcast/management default — 1 Mbps CCK = rate hw_value 0.
 RATE_1MBPS_CCK = 0
@@ -118,9 +111,19 @@ def stamp_seq_ctrl(frame: bytearray, seqno: int) -> int:
     return seqno
 
 
+def bulk_out_max_packet_size(dev: usb.core.Device, ep: int = USB_EP_BULK_OUT) -> int:
+    """wMaxPacketSize of bulk-OUT ``ep``: the size URB_ZERO_PACKET (dev.c:315) pads against."""
+    intf = dev.get_active_configuration()[(0, 0)]
+    endpoint = usb.util.find_descriptor(intf, bEndpointAddress=ep)
+    if endpoint is None:
+        raise IOError(f"rtl8187: no bulk-OUT endpoint 0x{ep:02x}")
+    return endpoint.wMaxPacketSize
+
+
 def inject_frame(
     dev: usb.core.Device,
     frame: bytes,
+    max_packet_size: int,
     *,
     ep: int = USB_EP_BULK_OUT,
     rate_hw_value: int = RATE_1MBPS_CCK,
@@ -149,10 +152,9 @@ def inject_frame(
         logger.warning(
             "bulk-OUT short write: sent=%d expected=%d", sent, len(payload)
         )
-    # URB_ZERO_PACKET (dev.c:315): if the transfer is an exact multiple of the bulk
-    # max-packet size, the trailing short packet that signals end-of-transfer is absent,
-    # so the chip waits for more data and never fires the frame. Send an explicit ZLP.
-    if sent and sent % USB_BULK_MAXPACKET == 0:
+    # URB_ZERO_PACKET (dev.c:315): a transfer that is an exact multiple of wMaxPacketSize
+    # has no terminating short packet, so the chip never fires it. PyUSB adds no ZLP.
+    if sent and sent % max_packet_size == 0:
         dev.write(ep, b"", timeout_ms)
     return sent
 
