@@ -9,8 +9,9 @@ import sys
 import zipfile
 from pathlib import Path
 
+import pytest
+
 from wifit3.crack.hc22000_format import Hc22000Line
-from wifit3.crack.passwords import DEFAULT_PASSWORDS_PATH
 from wifit3.models import AccessPoint, CaptureType, Handshake, HandshakeMessage, ToolName
 from wifit3.persist.config import Config
 from wifit3.persist.vault import Vault, crosses_auto_crack_threshold
@@ -354,7 +355,8 @@ _CLIENT = "11:22:33:44:55:66"
 
 
 def _auto_crack_call(capture, extra_passwords: list[str] | None = None) -> tuple:
-    return (("cpu_crack", capture, {"wordlists": [str(DEFAULT_PASSWORDS_PATH)],
+    return (("cpu_crack", capture, {"wordlists": [], "default_passwords": True,
+                                    "ap_ssid_passwords": True, "probed_ssid_passwords": True,
                                     "extra_passwords": extra_passwords or []}),
             {"auto_crack": True})
 
@@ -388,6 +390,15 @@ def test_auto_crack_snapshots_probed_ssids_sorted(tmp_path, mocker):
 
     capture = v.persisted(_ap_with_hs().bssid)[0]
     assert v.manager.submit_job.call_args == _auto_crack_call(capture, ["Alpha_SSID", "Zeta_SSID"])
+
+
+@pytest.mark.parametrize("ticked", [True, False])
+def test_add_probed_ssids_only_when_the_job_asks_for_them(tmp_path, ticked):
+    v = Vault()
+    v.set_probed_ssids_source(lambda: {"Zeta_SSID", "Alpha_SSID"})
+    config = {"wordlists": [], "probed_ssid_passwords": ticked}
+    expected = {**config, "extra_passwords": ["Alpha_SSID", "Zeta_SSID"]} if ticked else config
+    assert v.add_probed_ssids(config) == expected
 
 
 def test_save_does_not_submit_when_auto_crack_is_off(tmp_path, mocker, monkeypatch):
@@ -424,7 +435,7 @@ def test_save_submits_to_the_chosen_tool_with_its_saved_settings(tmp_path, mocke
     capture = v.persisted(_ap_with_hs().bssid)[0]
     assert v.manager.submit_job.call_args == (
         ("hashcat", capture, {"hashcat_exe": "/usr/bin/hashcat", "wordlists": ["/lists/a.txt"],
-                              "hashcat_args": "-w 3", "extra_passwords": []}),
+                              "hashcat_args": "-w 3"}),
         {"auto_crack": True})
 
 

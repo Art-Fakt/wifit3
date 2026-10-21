@@ -9,7 +9,6 @@ from typing import Any, TypeVar, get_args, get_origin, get_type_hints
 
 from platformdirs import user_config_dir
 
-from wifit3.crack.passwords import DEFAULT_PASSWORDS_PATH
 from wifit3.dot11 import SSID_MAX_OCTETS
 from wifit3.models.jobs import ToolName
 
@@ -22,7 +21,10 @@ class ConfigError(Exception):
 
 @dataclass
 class CpuCrackSettings:
-    wordlists: list[str] = field(default_factory=lambda: [str(DEFAULT_PASSWORDS_PATH)])
+    wordlists: list[str] = field(default_factory=list)
+    default_passwords: bool = True
+    ap_ssid_passwords: bool = True
+    probed_ssid_passwords: bool = True
 
 
 @dataclass

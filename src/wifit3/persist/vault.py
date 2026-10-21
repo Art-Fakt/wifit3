@@ -95,8 +95,14 @@ class Vault:
         self._change_listeners.append(listener)
 
     def set_probed_ssids_source(self, source: Callable[[], Iterable[str]]) -> None:
-        """Where auto-crack reads this session's probed SSIDs, tried as passwords before the wordlist."""
+        """Where CPU Crack jobs read this session's probed SSIDs, tried before the wordlist."""
         self._probed_ssids_source = source
+
+    def add_probed_ssids(self, config: dict) -> dict:
+        """``config`` plus this session's probed SSIDs as ``extra_passwords``, when it asks for them."""
+        if not config.get("probed_ssid_passwords"):
+            return config
+        return {**config, "extra_passwords": sorted(self._probed_ssids_source())}
 
     def _notify_changed(self) -> None:
         self.revision += 1
@@ -228,8 +234,7 @@ class Vault:
         if config is None:
             return
         if crosses_auto_crack_threshold(before, self._hc_lines(ap)):
-            self.manager.submit_job(tool.name, capture,
-                                    {**config, "extra_passwords": sorted(self._probed_ssids_source())},
+            self.manager.submit_job(tool.name, capture, self.add_probed_ssids(config),
                                     auto_crack=True)
 
     def save_wep_key(self, ap: "AccessPoint", key: bytes) -> Optional[SaveResult]:

@@ -241,13 +241,17 @@ async def test_cpu_crack_launches_with_only_the_wordlists_and_remembers_them():
         app.screen.query_one("#wordlist-launch", Button).press()
         await pilot.pause()
 
-    assert dismissed == [{"wordlists": [r"D:\a.txt", r"D:\b.txt"]}]
+    assert dismissed == [{"wordlists": [r"D:\a.txt", r"D:\b.txt"], "default_passwords": True,
+                          "ap_ssid_passwords": True, "probed_ssid_passwords": True}]
     assert Config.cpu_crack.wordlists == [r"D:\a.txt", r"D:\b.txt"]
     assert Config.hashcat.wordlists == []
 
 
-async def test_cpu_crack_refuses_to_launch_without_a_wordlist():
+async def test_cpu_crack_refuses_to_launch_without_a_wordlist_or_password_source():
     Config.cpu_crack.wordlists = []
+    Config.cpu_crack.default_passwords = False
+    Config.cpu_crack.ap_ssid_passwords = False
+    Config.cpu_crack.probed_ssid_passwords = False
     app = _Host()
     async with app.run_test() as pilot:
         dismissed = []

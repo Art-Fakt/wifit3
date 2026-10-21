@@ -4,7 +4,6 @@ import pytest
 
 import wifit3.persist.config as cfg
 from wifit3.models import ToolName
-from wifit3.crack.passwords import DEFAULT_PASSWORDS_PATH
 from wifit3.persist.config import (Config, ConfigError, CpuCrackSettings, HashcatSettings,
                                    HashtopolisSettings)
 
@@ -213,7 +212,8 @@ def test_scanner_sort_delay_save_load_roundtrip(config_path):
 
 
 def test_tool_settings_defaults(config_path):
-    assert Config.cpu_crack == CpuCrackSettings(wordlists=[str(DEFAULT_PASSWORDS_PATH)])
+    assert Config.cpu_crack == CpuCrackSettings(wordlists=[], default_passwords=True,
+                                                ap_ssid_passwords=True, probed_ssid_passwords=True)
     assert Config.hashcat == HashcatSettings()
     assert Config.hashtopolis == HashtopolisSettings()
 
@@ -236,6 +236,17 @@ def test_hashcat_settings_round_trip_in_their_table(config_path):
     Config.hashcat = HashcatSettings()
     Config.load()
     assert Config.hashcat == saved
+
+
+def test_cpu_crack_password_sources_round_trip(config_path):
+    Config.cpu_crack = CpuCrackSettings(wordlists=["/dicts/small.txt"], default_passwords=False,
+                                        ap_ssid_passwords=True, probed_ssid_passwords=False)
+    Config.save()
+    Config.cpu_crack = CpuCrackSettings()
+    Config.load()
+    assert Config.cpu_crack == CpuCrackSettings(wordlists=["/dicts/small.txt"],
+                                                default_passwords=False, ap_ssid_passwords=True,
+                                                probed_ssid_passwords=False)
 
 
 def test_cpu_crack_and_hashcat_wordlists_are_separate(config_path):
@@ -277,7 +288,7 @@ def test_legacy_flat_keys_migrate_into_the_tables(config_path):
     Config.load()
     assert Config.hashcat == HashcatSettings(path="/usr/bin/hashcat", args="-w 3",
                                              wordlists=["/dicts/rockyou.txt"])
-    assert Config.cpu_crack.wordlists == [str(DEFAULT_PASSWORDS_PATH)]
+    assert Config.cpu_crack.wordlists == []
     assert Config.hashtopolis == HashtopolisSettings(
         url="http://server:8080", access_key="key", wordlist_id=3, wordlist_name="rockyou.txt",
         access_group_id=1)

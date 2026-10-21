@@ -306,7 +306,8 @@ class _CapturePanel(VerticalGroup):
         def _on_config(config: dict | None) -> None:
             if not config:
                 return
-            job_id = self.app.vault.manager.submit_job(tool_name, cap, config)
+            job_id = self.app.vault.manager.submit_job(
+                tool_name, cap, self.app.vault.add_probed_ssids(config))
             self.notify(f"Queued job: {job_id}")
             
         self.app.push_screen(modal_cls(), _on_config)

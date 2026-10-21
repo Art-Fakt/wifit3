@@ -6,7 +6,7 @@ from typing import Any, Dict, Iterator, Optional
 
 from wifit3.crack import wpa_psk
 from wifit3.crack.hc22000_format import Hc22000Line, parse_hc22000
-from wifit3.crack.passwords import read_passwords, ssid_passwords, ssid_variants
+from wifit3.crack.passwords import DEFAULT_PASSWORDS_PATH, read_passwords, ssid_passwords, ssid_variants
 from wifit3.dot11 import wpa
 from wifit3.models import PersistedCapture, ToolCapability, ToolResult, ToolStatus
 from wifit3.models.jobs import JobAction, JobState, ToolName
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class _WordlistRun:
-    wordlist: Path
+    wordlist: Optional[Path]                    # None when the job runs SSID passwords only
     ssid_passwords: list[str]                   # tried before the wordlist's own passwords
     lines_by_essid: dict[bytes, list[Hc22000Line]]
     passwords_tried: int = 0
@@ -56,27 +56,37 @@ class CpuCrackTool(CrackerTool[WordlistQueue]):
         self._runs: Dict[str, _WordlistRun] = {}
 
     def auto_crack_config(self) -> Optional[dict[str, Any]]:
-        return {"wordlists": list(Config.cpu_crack.wordlists)} if Config.cpu_crack.wordlists else None
+        settings = Config.cpu_crack
+        if not (settings.wordlists or settings.default_passwords or settings.ap_ssid_passwords
+                or settings.probed_ssid_passwords):
+            return None
+        return {"wordlists": list(settings.wordlists),
+                "default_passwords": settings.default_passwords,
+                "ap_ssid_passwords": settings.ap_ssid_passwords,
+                "probed_ssid_passwords": settings.probed_ssid_passwords}
 
     def launch(self, job: JobState, capture: PersistedCapture) -> None:
         requested = job.config.get("wordlists") or []
-        if not requested:
-            raise ValueError("Missing wordlists in config")
         wordlists = expand_wordlists(requested)
-        if not wordlists:
+        if requested and not wordlists:
             raise ValueError(f"Wordlist not found: {', '.join(requested)}")
-        self._start_wordlist(job, WordlistQueue(wordlists=wordlists))
+        if job.config.get("default_passwords"):
+            wordlists.insert(0, str(DEFAULT_PASSWORDS_PATH.resolve()))
+        self._start_wordlist(job, WordlistQueue(wordlists=list(dict.fromkeys(wordlists))))
 
     def _start_wordlist(self, job: JobState, queue: WordlistQueue) -> None:
         lines_by_essid = _lines_by_essid(job.capture_path)
         if not lines_by_essid:
             raise ValueError(f"No hashlines in {job.capture_path}")
         essid_passwords = [psk for essid in lines_by_essid
-                           for psk in ssid_variants(essid.decode("utf-8", errors="replace"))]
+                           for psk in ssid_variants(essid.decode("utf-8", errors="replace"))
+                           ] if job.config.get("ap_ssid_passwords", True) else []
         first_passwords = [] if queue.index else list(dict.fromkeys(
             essid_passwords + ssid_passwords(job.config.get("extra_passwords", []))))
-        run = _WordlistRun(wordlist=Path(str(queue.current)), ssid_passwords=first_passwords,
-                           lines_by_essid=lines_by_essid)
+        if not first_passwords and queue.current is None:
+            raise ValueError("No passwords to try: choose a wordlist or a password source")
+        run = _WordlistRun(wordlist=Path(queue.current) if queue.current else None,
+                           ssid_passwords=first_passwords, lines_by_essid=lines_by_essid)
         run.unpaused.set()
         run.thread = threading.Thread(target=self._crack, args=(run,), daemon=True,
                                       name=f"cpu_crack {queue.label}")
@@ -98,12 +108,14 @@ class CpuCrackTool(CrackerTool[WordlistQueue]):
                 run.passwords_tried += 1
             run.exhausted = True
         except Exception as exc:
-            logger.exception(f"cpu_crack failed on {run.wordlist}")
+            logger.exception(f"cpu_crack failed on {run.wordlist or 'SSID passwords'}")
             run.error = str(exc)
 
     @staticmethod
     def _passwords(run: _WordlistRun) -> Iterator[str]:
         yield from run.ssid_passwords
+        if run.wordlist is None:
+            return
         already_tried = set(run.ssid_passwords)
         yield from (psk for psk in read_passwords(run.wordlist) if psk not in already_tried)
 
@@ -168,3 +180,7 @@ class CpuCrackTool(CrackerTool[WordlistQueue]):
         if queue.stopped or queue.skipping_wordlist:
             return JobAction.STOP
         return self._queue_actions(queue) | self._pause_action(progress_msg)
+
+    @staticmethod
+    def _exhausted_msg(queue: WordlistQueue) -> str:
+        return CrackerTool._exhausted_msg(queue) if queue.wordlists else "SSID passwords"
