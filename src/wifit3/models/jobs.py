@@ -1,6 +1,11 @@
-from enum import Enum, IntFlag, auto
+from enum import Enum, IntFlag, StrEnum, auto
 from dataclasses import asdict, dataclass, field, fields
 from typing import Any, Optional
+
+class ToolName(StrEnum):
+    CPU_CRACK = "cpu_crack"
+    HASHCAT = "hashcat"
+    HASHTOPOLIS = "hashtopolis"
 
 class ToolCapability(IntFlag):
     NONE = 0

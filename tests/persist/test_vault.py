@@ -11,7 +11,7 @@ from pathlib import Path
 
 from wifit3.crack.hc22000_format import Hc22000Line
 from wifit3.crack.passwords import DEFAULT_PASSWORDS_PATH
-from wifit3.models import AccessPoint, CaptureType, Handshake, HandshakeMessage
+from wifit3.models import AccessPoint, CaptureType, Handshake, HandshakeMessage, ToolName
 from wifit3.persist.config import Config
 from wifit3.persist.vault import Vault, crosses_auto_crack_threshold
 
@@ -361,7 +361,7 @@ def _auto_crack_call(capture, extra_passwords: list[str] | None = None) -> tuple
 
 def test_save_submits_cpu_crack_once_per_threshold(tmp_path, mocker):
     v = Vault()
-    v.manager = mocker.Mock()
+    mocker.patch.object(v.manager, "submit_job")
     ap = _ap_with_hs(pmkid=b"\x11" * 16)
 
     v.save_handshake(ap, _CLIENT)
@@ -379,7 +379,7 @@ def test_save_submits_cpu_crack_once_per_threshold(tmp_path, mocker):
 
 def test_auto_crack_snapshots_probed_ssids_sorted(tmp_path, mocker):
     v = Vault()
-    v.manager = mocker.Mock()
+    mocker.patch.object(v.manager, "submit_job")
     probed_ssids = {"Zeta_SSID", "Alpha_SSID"}
     v.set_probed_ssids_source(lambda: probed_ssids)
 
@@ -391,9 +391,9 @@ def test_auto_crack_snapshots_probed_ssids_sorted(tmp_path, mocker):
 
 
 def test_save_does_not_submit_when_auto_crack_is_off(tmp_path, mocker, monkeypatch):
-    monkeypatch.setattr(Config, "auto_crack", False)
+    monkeypatch.setattr(Config, "auto_crack_tool", None)
     v = Vault()
-    v.manager = mocker.Mock()
+    mocker.patch.object(v.manager, "submit_job")
 
     v.save_handshake(_ap_with_hs(), _CLIENT)
 
@@ -402,10 +402,48 @@ def test_save_does_not_submit_when_auto_crack_is_off(tmp_path, mocker, monkeypat
 
 def test_save_does_not_submit_when_the_psk_is_known(tmp_path, mocker):
     v = Vault()
-    v.manager = mocker.Mock()
+    mocker.patch.object(v.manager, "submit_job")
     ap = _ap_with_hs()
     ap.wps_pbc_psk = "knownpsk"
 
     v.save_handshake(ap, _CLIENT)
+
+    v.manager.submit_job.assert_not_called()
+
+
+def test_save_submits_to_the_chosen_tool_with_its_saved_settings(tmp_path, mocker, monkeypatch):
+    monkeypatch.setattr(Config, "auto_crack_tool", ToolName.HASHCAT)
+    monkeypatch.setattr(Config, "hashcat_path", "/usr/bin/hashcat")
+    monkeypatch.setattr(Config, "wordlist_paths", ["/lists/a.txt"])
+    monkeypatch.setattr(Config, "hashcat_args", "-w 3")
+    v = Vault()
+    mocker.patch.object(v.manager, "submit_job")
+
+    v.save_handshake(_ap_with_hs(), _CLIENT)
+
+    capture = v.persisted(_ap_with_hs().bssid)[0]
+    assert v.manager.submit_job.call_args == (
+        ("hashcat", capture, {"hashcat_exe": "/usr/bin/hashcat", "wordlists": ["/lists/a.txt"],
+                              "hashcat_args": "-w 3", "extra_passwords": []}),
+        {"automatic": True})
+
+
+def test_save_does_not_submit_to_an_unconfigured_tool(tmp_path, mocker, monkeypatch):
+    monkeypatch.setattr(Config, "auto_crack_tool", ToolName.HASHCAT)
+    monkeypatch.setattr(Config, "hashcat_path", None)
+    v = Vault()
+    mocker.patch.object(v.manager, "submit_job")
+
+    v.save_handshake(_ap_with_hs(), _CLIENT)
+
+    v.manager.submit_job.assert_not_called()
+
+
+def test_save_does_not_submit_a_capture_the_tool_cannot_crack(tmp_path, mocker):
+    v = Vault()
+    mocker.patch.object(v.manager, "submit_job")
+    mocker.patch.object(v.manager.tools[ToolName.CPU_CRACK], "can_crack", return_value=False)
+
+    v.save_handshake(_ap_with_hs(), _CLIENT)
 
     v.manager.submit_job.assert_not_called()

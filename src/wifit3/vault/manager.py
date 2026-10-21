@@ -10,6 +10,7 @@ from wifit3.models.jobs import JobAction, JobState, ToolCapability, ToolStatus, 
 from wifit3.vault.tools.base import VaultTool
 from wifit3.vault.tools.cpu_crack import CpuCrackTool
 from wifit3.vault.tools.hashcat import HashcatTool
+from wifit3.vault.tools.hashtopolis import HashtopolisTool
 from wifit3.crack.hc22000_format import parse_hc22000
 from wifit3.persist.config import Config
 
@@ -35,6 +36,7 @@ class JobManager:
         self.tools: Dict[str, VaultTool] = {}
         self.register_tool(HashcatTool())
         self.register_tool(CpuCrackTool())
+        self.register_tool(HashtopolisTool())
         self._load()
 
     def register_tool(self, tool: VaultTool) -> None:
@@ -79,7 +81,7 @@ class JobManager:
                     job.progress_msg = "Stopped when wifit3 closed."
                     changed = True
                     continue
-                if not (tool and job.log_path):
+                if not (tool and (job.log_path or job.api_id)):
                     job.status = ToolStatus.ERROR
                     job.progress_msg = "Process ended while wifit3 was closed."
                     changed = True

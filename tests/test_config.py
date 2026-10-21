@@ -3,6 +3,7 @@ import copy
 import pytest
 
 import wifit3.persist.config as cfg
+from wifit3.models import ToolName
 from wifit3.persist.config import Config, ConfigError
 
 _DEFAULTS = {n: getattr(Config, n)
@@ -10,7 +11,9 @@ _DEFAULTS = {n: getattr(Config, n)
                  "theme", "scanner_sort", "scanner_sort_reverse", "scanner_sort_delay",
                  "silenced_bssids", "hide_silenced", "log_level", "captures_dir", "save_pcap",
                  "hashcat_path", "wordlist_paths", "hashcat_args", "decloaked_ssids",
-                 "wps_auto_pbc", "auto_crack")}
+                 "wps_auto_pbc", "auto_crack_tool", "hashtopolis_url", "hashtopolis_access_key",
+                 "hashtopolis_wordlist_id", "hashtopolis_wordlist_name",
+                 "hashtopolis_access_group_id")}
 
 
 @pytest.fixture(autouse=True)
@@ -150,19 +153,38 @@ def test_wps_auto_pbc_absent_key_keeps_default(config_path):
     assert Config.wps_auto_pbc is True
 
 
-def test_auto_crack_save_load_roundtrip(config_path):
-    assert Config.auto_crack is True
-    Config.auto_crack = False
+def test_auto_crack_tool_save_load_roundtrip(config_path):
+    assert Config.auto_crack_tool is ToolName.CPU_CRACK
+    Config.auto_crack_tool = ToolName.HASHCAT
     Config.save()
-    Config.auto_crack = True
+    Config.auto_crack_tool = None
     Config.load()
-    assert Config.auto_crack is False
+    assert Config.auto_crack_tool is ToolName.HASHCAT
 
 
-def test_auto_crack_absent_key_keeps_default(config_path):
+def test_auto_crack_tool_off_roundtrip(config_path):
+    Config.auto_crack_tool = None
+    Config.save()
+    Config.auto_crack_tool = ToolName.CPU_CRACK
+    Config.load()
+    assert Config.auto_crack_tool is None
+
+
+def test_auto_crack_tool_absent_key_keeps_default(config_path):
     config_path.write_text('theme = "nord"\n')
     Config.load()
-    assert Config.auto_crack is True
+    assert Config.auto_crack_tool is ToolName.CPU_CRACK
+
+
+@pytest.mark.parametrize(("line", "expected"), [
+    ("auto_crack = true", ToolName.CPU_CRACK),
+    ("auto_crack = false", None),
+    ("auto_crack_tool = 'nonexistent'", None),
+])
+def test_auto_crack_tool_load_maps_legacy_and_unknown_values(config_path, line, expected):
+    config_path.write_text(line + "\n")
+    Config.load()
+    assert Config.auto_crack_tool is expected
 
 
 def test_hide_silenced_absent_key_keeps_default(config_path):
@@ -262,3 +284,22 @@ def test_decloaked_ssids_load_drops_junk_entries(config_path):
     config_path.write_text("[decloak]\n'AA:BB:CC:DD:EE:FF' = 'Net'\n'11:22:33:44:55:66' = 7\n")
     Config.load()
     assert Config.decloaked_ssids == {"aa:bb:cc:dd:ee:ff": "Net"}
+
+
+def test_hashtopolis_settings_save_load_roundtrip(config_path):
+    Config.hashtopolis_url, Config.hashtopolis_access_key = "http://server:8080", "key"
+    Config.hashtopolis_wordlist_id, Config.hashtopolis_wordlist_name = 3, "rockyou.txt"
+    Config.hashtopolis_access_group_id = 1
+    Config.save()
+    Config.hashtopolis_url = Config.hashtopolis_access_key = None
+    Config.hashtopolis_wordlist_id = Config.hashtopolis_access_group_id = None
+    Config.hashtopolis_wordlist_name = None
+    Config.load()
+    assert (Config.hashtopolis_url, Config.hashtopolis_access_key, Config.hashtopolis_wordlist_id,
+            Config.hashtopolis_wordlist_name, Config.hashtopolis_access_group_id) == (
+        "http://server:8080", "key", 3, "rockyou.txt", 1)
+
+
+def test_unset_hashtopolis_settings_stay_out_of_the_file(config_path):
+    Config.save()
+    assert "hashtopolis" not in config_path.read_text()

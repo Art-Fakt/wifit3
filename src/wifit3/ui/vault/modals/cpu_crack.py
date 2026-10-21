@@ -10,7 +10,7 @@ _ABOUT = ("[b]Note:[/b] CPU Crack is wifit3's built-in WPA cracker.\n"
 class CpuCrackConfigModal(WordlistConfigModal):
     """Configuration modal for CPU Crack jobs."""
 
-    dialog_title = "Launch CPU Crack"
+    dialog_title = "CPU Crack"
 
     DEFAULT_CSS = """
     CpuCrackConfigModal #cpu-crack-about { margin: 1 0; }

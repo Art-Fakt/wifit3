@@ -44,8 +44,8 @@ async def test_scanner_logs_auto_crack_status_only_when_it_changes(monkeypatch):
 
         scanner._log_auto_crack_status_when_changed()
         scanner._log_auto_crack_status_when_changed()
-        assert len(lines) == 2 and "enabled" in lines[0]
+        assert len(lines) == 2 and "enabled" in lines[0] and "CPU Crack" in lines[1]
 
-        monkeypatch.setattr(Config, "auto_crack", False)
+        monkeypatch.setattr(Config, "auto_crack_tool", None)
         scanner._log_auto_crack_status_when_changed()
         assert len(lines) == 3 and "disabled" in lines[2]

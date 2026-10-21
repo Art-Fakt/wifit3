@@ -29,8 +29,10 @@ class WordlistConfigModal(ModalScreen[dict]):
 
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
 
-    def __init__(self) -> None:
+    def __init__(self, confirm_label: str = "Launch") -> None:
+        """``confirm_label`` "Save" configures the tool without the caller launching a job."""
         super().__init__()
+        self._confirm_label = confirm_label
         self._wordlists: list[str] = list(Config.wordlist_paths)
 
     # CSS, not DEFAULT_CSS: the app's `Button { min-width: 12 }` outranks any DEFAULT_CSS rule.
@@ -95,7 +97,7 @@ class WordlistConfigModal(ModalScreen[dict]):
             yield from self._compose_fields()
             with Horizontal(id="wordlist-buttons"):
                 yield Button("Cancel", variant="error", id="wordlist-cancel")
-                yield Button("Launch", variant="success", id="wordlist-launch")
+                yield Button(self._confirm_label, variant="success", id="wordlist-launch")
 
     def _compose_fields(self) -> ComposeResult:
         yield from self._compose_wordlists()

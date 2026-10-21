@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Dict, Iterable, List, Optional
 
 from wifit3.crack.hc22000_format import Hc22000Line
-from wifit3.crack.passwords import DEFAULT_PASSWORDS_PATH
 from wifit3.models import CaptureType, PersistedCapture
 from wifit3.persist import save
 from wifit3.persist.capture_history import load_capture_index, summarize
@@ -20,7 +19,6 @@ from wifit3.persist.common import LEGACY_CAPTURE_RE, bssid_to_dashed, safe_ssid
 from wifit3.persist.config import Config
 from wifit3.persist.save import SaveResult
 from wifit3.vault.manager import JobManager
-from wifit3.vault.tools.cpu_crack import CpuCrackTool
 
 if TYPE_CHECKING:
     from wifit3.models import AccessPoint
@@ -223,12 +221,15 @@ class Vault:
 
     def _auto_crack(self, ap: "AccessPoint", capture: PersistedCapture,
                     before: List[Hc22000Line]) -> None:
-        if not Config.auto_crack or self.has_psk(ap):
+        tool = self.manager.tools.get(Config.auto_crack_tool) if Config.auto_crack_tool else None
+        if tool is None or self.has_psk(ap) or not tool.can_crack(capture):
+            return
+        config = tool.unattended_config()
+        if config is None:
             return
         if crosses_auto_crack_threshold(before, self._hc_lines(ap)):
-            self.manager.submit_job(CpuCrackTool.name, capture,
-                                    {"wordlists": [str(DEFAULT_PASSWORDS_PATH)],
-                                     "extra_passwords": sorted(self._probed_ssids_source())},
+            self.manager.submit_job(tool.name, capture,
+                                    {**config, "extra_passwords": sorted(self._probed_ssids_source())},
                                     automatic=True)
 
     def save_wep_key(self, ap: "AccessPoint", key: bytes) -> Optional[SaveResult]:

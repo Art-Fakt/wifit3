@@ -2,14 +2,15 @@ import logging
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterator, Optional
+from typing import Any, Dict, Iterator, Optional
 
 from wifit3.crack import wpa_psk
 from wifit3.crack.hc22000_format import Hc22000Line, parse_hc22000
-from wifit3.crack.passwords import read_passwords, ssid_passwords, ssid_variants
+from wifit3.crack.passwords import (DEFAULT_PASSWORDS_PATH, read_passwords, ssid_passwords,
+                                    ssid_variants)
 from wifit3.dot11 import wpa
 from wifit3.models import PersistedCapture, ToolCapability, ToolResult, ToolStatus
-from wifit3.models.jobs import JobAction, JobState
+from wifit3.models.jobs import JobAction, JobState, ToolName
 from wifit3.vault.tools.cracker import CrackerTool, WordlistQueue, expand_wordlists
 
 
@@ -45,7 +46,7 @@ def _lines_by_essid(capture_path: str) -> dict[bytes, list[Hc22000Line]]:
 
 
 class CpuCrackTool(CrackerTool[WordlistQueue]):
-    name = "cpu_crack"
+    name = ToolName.CPU_CRACK
     label = "CPU Crack"
     description = "Built-in CPU cracker (WPA/WPA2/PMKID)"
     capabilities = ToolCapability.KILLABLE | ToolCapability.SINGLETON
@@ -53,6 +54,9 @@ class CpuCrackTool(CrackerTool[WordlistQueue]):
 
     def __init__(self) -> None:
         self._runs: Dict[str, _WordlistRun] = {}
+
+    def unattended_config(self) -> Optional[dict[str, Any]]:
+        return {"wordlists": [str(DEFAULT_PASSWORDS_PATH)]}
 
     def launch(self, job: JobState, capture: PersistedCapture) -> None:
         requested = job.config.get("wordlists") or []

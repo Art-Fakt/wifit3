@@ -7,6 +7,7 @@ from pathlib import Path
 from platformdirs import user_config_dir
 
 from wifit3.dot11 import SSID_MAX_OCTETS
+from wifit3.models.jobs import ToolName
 
 _PATH = Path(user_config_dir("wifit3", appauthor=False)) / "config.toml"
 
@@ -27,10 +28,15 @@ class Config:
     decloaked_ssids: dict[str, str] = {}
     hide_silenced: bool = False
     wps_auto_pbc: bool = True
-    auto_crack: bool = True
+    auto_crack_tool: ToolName | None = ToolName.CPU_CRACK
     hashcat_path: str | None = None
     wordlist_paths: list[str] = []
     hashcat_args: str | None = None
+    hashtopolis_url: str | None = None
+    hashtopolis_access_key: str | None = None
+    hashtopolis_wordlist_id: int | None = None
+    hashtopolis_wordlist_name: str | None = None
+    hashtopolis_access_group_id: int | None = None
 
     @classmethod
     def is_silenced(cls, bssid: str) -> bool:
@@ -80,11 +86,20 @@ class Config:
                                    and len(ssid.encode("utf-8")) <= SSID_MAX_OCTETS}
         cls.hide_silenced = bool(data.get("hide_silenced", cls.hide_silenced))
         cls.wps_auto_pbc = bool(data.get("wps_auto_pbc", cls.wps_auto_pbc))
-        cls.auto_crack = bool(data.get("auto_crack", cls.auto_crack))
+        cls.auto_crack_tool = _auto_crack_tool(data, cls.auto_crack_tool)
         cls.hashcat_path = _optional_str(data.get("hashcat_path"), cls.hashcat_path)
         cls.wordlist_paths = _wordlist_paths(data.get("wordlist_paths"),
                                             data.get("wordlist_path"), cls.wordlist_paths)
         cls.hashcat_args = _optional_str(data.get("hashcat_args"), cls.hashcat_args)
+        cls.hashtopolis_url = _optional_str(data.get("hashtopolis_url"), cls.hashtopolis_url)
+        cls.hashtopolis_access_key = _optional_str(data.get("hashtopolis_access_key"),
+                                                   cls.hashtopolis_access_key)
+        cls.hashtopolis_wordlist_id = _optional_int(data.get("hashtopolis_wordlist_id"),
+                                                    cls.hashtopolis_wordlist_id)
+        cls.hashtopolis_wordlist_name = _optional_str(data.get("hashtopolis_wordlist_name"),
+                                                      cls.hashtopolis_wordlist_name)
+        cls.hashtopolis_access_group_id = _optional_int(data.get("hashtopolis_access_group_id"),
+                                                        cls.hashtopolis_access_group_id)
 
     @classmethod
     def save(cls) -> None:
@@ -99,10 +114,12 @@ class Config:
             f"silenced_bssids = {_fmt(cls.silenced_bssids)}\n"
             f"hide_silenced = {_fmt(cls.hide_silenced)}\n"
             f"wps_auto_pbc = {_fmt(cls.wps_auto_pbc)}\n"
-            f"auto_crack = {_fmt(cls.auto_crack)}\n"
+            f"auto_crack_tool = {_fmt(cls.auto_crack_tool or '')}\n"
         )
         # TOML has no null: an unset path is an absent key, not an empty string.
-        for key in ("hashcat_path", "wordlist_paths", "hashcat_args"):
+        for key in ("hashcat_path", "wordlist_paths", "hashcat_args", "hashtopolis_url",
+                    "hashtopolis_access_key", "hashtopolis_wordlist_id",
+                    "hashtopolis_wordlist_name", "hashtopolis_access_group_id"):
             value = getattr(cls, key)
             if value:
                 text += f"{key} = {_fmt(value)}\n"
@@ -125,11 +142,32 @@ def _wordlist_paths(raw: object, legacy: object, current: list[str]) -> list[str
     return current
 
 
+def _auto_crack_tool(data: dict, current: ToolName | None) -> ToolName | None:
+    """An empty or unknown tool name is None; a legacy ``auto_crack = true`` is CPU Crack."""
+    if "auto_crack_tool" in data:
+        try:
+            return ToolName(data["auto_crack_tool"])
+        except ValueError:
+            return None
+    if "auto_crack" in data:
+        return ToolName.CPU_CRACK if data["auto_crack"] else None
+    return current
+
+
 def _optional_str(raw: object, current: str | None) -> str | None:
     """A non-empty string from the file, else whatever is already set."""
     if raw is None:
         return current
     return str(raw) or None
+
+
+def _optional_int(raw: object, current: int | None) -> int | None:
+    if raw is None:
+        return current
+    try:
+        return int(raw) or None
+    except (TypeError, ValueError):
+        return current
 
 
 def _fmt(v: object) -> str:

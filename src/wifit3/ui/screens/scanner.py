@@ -135,7 +135,7 @@ class ScannerView(Screen):
         # (app.pbc_enabled). Watcher + capturing serialization stay Scanner-local.
         self._pbc_watcher = PbcWatcher()
         self._pbc_capturing = False          # serialize: one invade at a time
-        self._logged_auto_crack: Optional[bool] = None
+        self._logged_auto_crack_tool: Optional[str] = None
 
     # ----- Compose / mount ---------------------------------------------------
 
@@ -492,15 +492,16 @@ class ScannerView(Screen):
                 color="orange1"))
 
     def _log_auto_crack_status_when_changed(self) -> None:
-        if Config.auto_crack == self._logged_auto_crack:
+        tool_name = Config.auto_crack_tool or ""
+        if tool_name == self._logged_auto_crack_tool:
             return
-        self._logged_auto_crack = Config.auto_crack
-        if Config.auto_crack:
+        self._logged_auto_crack_tool = tool_name
+        tool = self.app.vault.manager.tools.get(tool_name)
+        if tool is not None:
             self._write_log(treelog.header(
                 "[bold]Auto-crack[/bold] is [bold green]enabled[/bold green] "
                 "[dim](change in Preferences, [bold]ctrl+p[/bold])[/dim]", color="green"))
-            self._write_log(treelog.leaf(
-                "[dim](tries default passwords on new captures with CPU Crack)[/dim]"))
+            self._write_log(treelog.leaf(f"[dim](tries new captures with {tool.label})[/dim]"))
         else:
             self._write_log(treelog.header(
                 "[bold]Auto-crack[/bold] is [orange1]disabled[/orange1] "

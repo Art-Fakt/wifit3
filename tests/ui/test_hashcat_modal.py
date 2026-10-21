@@ -235,7 +235,7 @@ async def test_cpu_crack_launches_with_only_the_wordlists_and_remembers_them():
         dismissed = []
         app.push_screen(CpuCrackConfigModal(), dismissed.append)
         await pilot.pause()
-        assert str(app.screen.query_one("#wordlist-title", Label).content) == "Launch CPU Crack"
+        assert str(app.screen.query_one("#wordlist-title", Label).content) == "CPU Crack"
         assert not app.screen.query("#hashcat-exe")
         await app.screen._wordlists_chosen([Path(r"D:\a.txt"), Path(r"D:\b.txt")])
         app.screen.query_one("#wordlist-launch", Button).press()

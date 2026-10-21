@@ -28,7 +28,7 @@ def _default_hashcat_path() -> str:
 class HashcatConfigModal(WordlistConfigModal):
     """Configuration modal for Hashcat jobs."""
 
-    dialog_title = "Launch Hashcat"
+    dialog_title = "Hashcat"
 
     DEFAULT_CSS = """
     .hashcat-label {
