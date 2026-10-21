@@ -135,7 +135,7 @@ class ScannerView(Screen):
         # (app.pbc_enabled). Watcher + capturing serialization stay Scanner-local.
         self._pbc_watcher = PbcWatcher()
         self._pbc_capturing = False          # serialize: one invade at a time
-        self._logged_auto_crack_tool: Optional[str] = None
+        self._logged_auto_crack: Optional[bool] = None
 
     # ----- Compose / mount ---------------------------------------------------
 
@@ -492,20 +492,18 @@ class ScannerView(Screen):
                 color="orange1"))
 
     def _log_auto_crack_status_when_changed(self) -> None:
-        tool_name = Config.auto_crack or ""
-        if tool_name == self._logged_auto_crack_tool:
+        enabled = Config.auto_crack is not None
+        if enabled == self._logged_auto_crack:
             return
-        self._logged_auto_crack_tool = tool_name
-        tool = self.app.vault.manager.tools.get(tool_name)
-        if tool is not None:
+        self._logged_auto_crack = enabled
+        if enabled:
             self._write_log(treelog.header(
                 "[bold]Auto-crack[/bold] is [bold green]enabled[/bold green] "
-                "[dim](change in Preferences, [bold]ctrl+p[/bold])[/dim]", color="green"))
-            self._write_log(treelog.leaf(f"[dim](tries new captures with {tool.label})[/dim]"))
+                f"[dim]({Config.auto_crack}, change in Prefs: [bold]ctrl+p[/bold])[/dim]", color="green"))
         else:
             self._write_log(treelog.header(
                 "[bold]Auto-crack[/bold] is [orange1]disabled[/orange1] "
-                "[dim](change in Preferences, [bold]ctrl+p[/bold])[/dim]", color="orange1"))
+                "[dim](change in Prefs: [bold]ctrl+p[/bold])[/dim]", color="orange1"))
 
     def on_wifite_app_job_cracked(self, message: "WifiteApp.JobCracked") -> None:
         job = message.job

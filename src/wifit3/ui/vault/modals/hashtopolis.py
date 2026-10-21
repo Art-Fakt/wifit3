@@ -12,7 +12,12 @@ from wifit3.persist.config import Config, ConfigError
 from wifit3.vault.tools.hashtopolis_api import (AccessGroup, HashtopolisApi, HashtopolisError,
                                                 ServerFile)
 
-_ACCESS_KEY_HELP = "[dim]Access key: the legacy UI on port 8080, Users → API Management.[/dim]"
+_ACCESS_KEY_HINT = "[dim]Use port 8080 (legacy API), [i]not 4200[/i]: Users → API Management[/dim]"
+_REFRESH_HINT = "[dim]Refresh to list wordlists[/dim]"
+
+
+def _plural(count: int, noun: str) -> str:
+    return f"{count} {noun}{'' if count == 1 else 's'}"
 
 
 class HashtopolisConfigModal(ModalScreen[dict]):
@@ -23,7 +28,8 @@ class HashtopolisConfigModal(ModalScreen[dict]):
 
     # CSS, not DEFAULT_CSS: the app's `Button { min-width: 12 }` outranks any DEFAULT_CSS rule.
     CSS = """
-    #hashtopolis-test { min-width: 0; width: 8; }
+    #hashtopolis-reveal { min-width: 0; width: auto; }
+    #hashtopolis-test { min-width: 0; width: auto; }
     """
 
     DEFAULT_CSS = """
@@ -33,8 +39,9 @@ class HashtopolisConfigModal(ModalScreen[dict]):
     }
     #hashtopolis-dialog {
         width: 64;
+        max-width: 100%;
         height: auto;
-        padding: 1 2;
+        padding: 0 1;
         background: $surface;
         border: solid $primary;
     }
@@ -44,55 +51,80 @@ class HashtopolisConfigModal(ModalScreen[dict]):
         text-style: bold;
         color: $accent;
     }
-    .hashtopolis-label { margin-top: 1; }
-    #hashtopolis-test-row { height: auto; margin-top: 1; }
+    #hashtopolis-dialog Horizontal { height: auto; }
+    #hashtopolis-access-key-label { width: 1fr; }
+    #hashtopolis-test-row { margin-top: 1; }
     #hashtopolis-test-result { width: 1fr; margin-left: 1; }
-    #hashtopolis-buttons {
-        margin-top: 2;
-        align: right middle;
-        height: auto;
-    }
+    .hashtopolis-target-label { width: 10; height: 3; content-align: left middle; }
+    .hashtopolis-target-row Select { width: 1fr; }
+    #hashtopolis-buttons { align: right middle; }
     """
 
     def __init__(self, confirm_label: str = "Launch") -> None:
         """``confirm_label`` "Save" configures the tool without the caller launching a job."""
         super().__init__()
         self._confirm_label = confirm_label
+        settings = Config.hashtopolis
         self._wordlists: dict[int, str] = {}
-        if Config.hashtopolis.wordlist_id:
-            self._wordlists[Config.hashtopolis.wordlist_id] = Config.hashtopolis.wordlist_name or ""
+        if settings.wordlist_id:
+            self._wordlists[settings.wordlist_id] = settings.wordlist_name or ""
+        self._groups: dict[int, str] = {}
+        if settings.access_group_id:
+            self._groups[settings.access_group_id] = (settings.access_group_name
+                                                      or str(settings.access_group_id))
 
     def compose(self) -> ComposeResult:
         with Vertical(id="hashtopolis-dialog"):
             yield Label("Hashtopolis", id="hashtopolis-title")
-            yield Label("Server URL:", classes="hashtopolis-label")
-            yield Input(Config.hashtopolis.url or "", placeholder="http://192.168.1.10:8080",
-                        id="hashtopolis-url")
-            yield Label("Access key:", classes="hashtopolis-label")
-            yield Input(Config.hashtopolis.access_key or "", password=True,
-                        id="hashtopolis-access-key")
-            yield Label(_ACCESS_KEY_HELP)
-            with Horizontal(id="hashtopolis-test-row"):
-                yield Button("Test", "primary", id="hashtopolis-test")
-                yield Label("", id="hashtopolis-test-result")
-            yield Label("Wordlist:", classes="hashtopolis-label")
-            yield Select([(name, file_id) for file_id, name in self._wordlists.items()],
-                         prompt="Test the connection to list wordlists",
-                         value=Config.hashtopolis.wordlist_id or Select.NULL,
-                         id="hashtopolis-wordlist")
-            yield Label("Access group:", classes="hashtopolis-label")
-            group_id = Config.hashtopolis.access_group_id
-            yield Select([(str(group_id), group_id)] if group_id else [],
-                         prompt="Test the connection to list access groups",
-                         value=group_id or Select.NULL, id="hashtopolis-access-group")
+            yield from self._compose_server()
+            yield from self._compose_test()
+            yield from self._compose_targets()
             with Horizontal(id="hashtopolis-buttons"):
                 yield Button("Cancel", variant="error", id="hashtopolis-cancel")
                 yield Button(self._confirm_label, variant="success", id="hashtopolis-confirm")
 
+    def _compose_server(self) -> ComposeResult:
+        settings = Config.hashtopolis
+        yield Label("Server URL:")
+        yield Input(settings.url or "", placeholder="http://192.168.1.10:8080",
+                    id="hashtopolis-url")
+        with Horizontal():
+            yield Label("Access key:", id="hashtopolis-access-key-label")
+            yield Button("reveal", compact=True, id="hashtopolis-reveal")
+        yield Input(settings.access_key or "", password=True,
+                    id="hashtopolis-access-key")
+        yield Label(_ACCESS_KEY_HINT)
+
+    def _compose_test(self) -> ComposeResult:
+        with Horizontal(id="hashtopolis-test-row"):
+            yield Button("Test / Refresh", "primary", compact=True, id="hashtopolis-test")
+            yield Label("" if self._wordlists else _REFRESH_HINT, id="hashtopolis-test-result")
+
+    def _compose_targets(self) -> ComposeResult:
+        settings = Config.hashtopolis
+        with Horizontal(classes="hashtopolis-target-row"):
+            yield Label("Wordlist:", classes="hashtopolis-target-label")
+            yield Select([(name, file_id) for file_id, name in self._wordlists.items()],
+                         prompt="Choose a wordlist", value=settings.wordlist_id or Select.NULL,
+                         id="hashtopolis-wordlist")
+        with Horizontal(classes="hashtopolis-target-row"):
+            yield Label("Group:", classes="hashtopolis-target-label")
+            yield Select([(name, group_id) for group_id, name in self._groups.items()],
+                         prompt="Choose an access group",
+                         value=settings.access_group_id or Select.NULL,
+                         id="hashtopolis-access-group")
+
+    @on(Button.Pressed, "#hashtopolis-reveal")
+    def _toggle_reveal(self, event: Button.Pressed) -> None:
+        event.stop()
+        access_key = self.query_one("#hashtopolis-access-key", Input)
+        access_key.password = not access_key.password
+        event.button.label = "reveal" if access_key.password else "hide"
+
     @on(Button.Pressed, "#hashtopolis-test")
     def _test_pressed(self, event: Button.Pressed) -> None:
         event.stop()
-        self.query_one("#hashtopolis-test-result", Label).update("[dim]Testing...[/dim]")
+        self.query_one("#hashtopolis-test-result", Label).update("[dim]Connecting...[/dim]")
         self._test(self.query_one("#hashtopolis-url", Input).value.strip(),
                    self.query_one("#hashtopolis-access-key", Input).value.strip())
 
@@ -111,17 +143,19 @@ class HashtopolisConfigModal(ModalScreen[dict]):
     def _show_test_failure(self, message: str) -> None:
         if not self.is_attached:
             return
-        self.query_one("#hashtopolis-test-result", Label).update(f"[red]{escape(message)}[/red]")
+        self.query_one("#hashtopolis-test-result", Label).update(f"[$error]{escape(message)}[/]")
 
     def _show_server_lists(self, wordlists: list[ServerFile], groups: list[AccessGroup]) -> None:
         if not self.is_attached:
             return
         result = self.query_one("#hashtopolis-test-result", Label)
         if wordlists:
-            result.update(f"[green]Connected[/green], {len(wordlists)} wordlist(s)")
+            result.update(f"[$success]Connected · {_plural(len(wordlists), 'wordlist')} · "
+                          f"{_plural(len(groups), 'group')}[/]")
         else:
-            result.update("[orange1]Connected, but no wordlists found[/orange1]")
+            result.update("[$warning]Connected · no wordlists found[/]")
         self._wordlists = {f.file_id: f.filename for f in wordlists}
+        self._groups = {g.group_id: g.name for g in groups}
         self._fill(self.query_one("#hashtopolis-wordlist", Select),
                    [(f.filename, f.file_id) for f in wordlists])
         self._fill(self.query_one("#hashtopolis-access-group", Select),
@@ -161,21 +195,22 @@ class HashtopolisConfigModal(ModalScreen[dict]):
 
     def _launch_config(self) -> Optional[dict[str, Any]]:
         """The job's config; the server URL and access key stay in Config, out of jobs.json."""
-        wordlist_id = self.query_one("#hashtopolis-wordlist", Select).value
-        group_id = self.query_one("#hashtopolis-access-group", Select).value
-        if not isinstance(wordlist_id, int) or not isinstance(group_id, int):
-            self.notify("Please test the connection and choose a wordlist and access group",
-                        severity="error")
+        wordlist_id = self.query_one("#hashtopolis-wordlist", Select).selection
+        group_id = self.query_one("#hashtopolis-access-group", Select).selection
+        if wordlist_id is None or group_id is None:
+            self.notify("Please refresh and choose a wordlist and access group", severity="error")
             return None
         return {"wordlist_id": wordlist_id, "wordlist_name": self._wordlists.get(wordlist_id, ""),
                 "access_group_id": group_id}
 
     def _remember(self, url: str, access_key: str, config: dict[str, Any]) -> None:
-        Config.hashtopolis.url = url
-        Config.hashtopolis.access_key = access_key
-        Config.hashtopolis.wordlist_id = config["wordlist_id"]
-        Config.hashtopolis.wordlist_name = config["wordlist_name"]
-        Config.hashtopolis.access_group_id = config["access_group_id"]
+        settings = Config.hashtopolis
+        settings.url = url
+        settings.access_key = access_key
+        settings.wordlist_id = config["wordlist_id"]
+        settings.wordlist_name = config["wordlist_name"]
+        settings.access_group_id = config["access_group_id"]
+        settings.access_group_name = self._groups.get(config["access_group_id"])
         try:
             Config.save()
         except ConfigError as e:

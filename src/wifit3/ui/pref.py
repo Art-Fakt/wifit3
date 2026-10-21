@@ -98,13 +98,13 @@ class AutoCrackSetting(VerticalGroup):
     """
 
     def compose(self) -> ComposeResult:
-        self.border_title = "Auto-crack captures with"
+        self.border_title = "Auto-crack new captures with"
         self._chosen = Config.auto_crack or ""
-        tools = self.app.vault.manager.tools.values()
+        tools = sorted(self.app.vault.manager.tools.values(), key=lambda t: t.label)
         options = [("Off", "")] + [(tool.label, tool.name) for tool in tools]
         with Horizontal():
             yield Select(options, id="auto_crack", value=self._chosen, allow_blank=False)
-            yield Button("⚙", id="auto_crack_configure", compact=True)
+            yield Button("≡", id="auto_crack_configure")
 
     def on_mount(self) -> None:
         self.query_one("#auto_crack_configure", Button).display = bool(self._chosen)
@@ -179,7 +179,7 @@ class PreferencesModal(ModalScreen):
 
     # CSS, not DEFAULT_CSS: the app's `Button { min-width: 12 }` outranks any DEFAULT_CSS rule.
     CSS = """
-    #auto_crack_configure { min-width: 0; width: 3; margin-left: 1; }
+    #auto_crack_configure { min-width: 0; width: 5; margin-left: 1; }
     """
 
     def compose(self) -> ComposeResult:

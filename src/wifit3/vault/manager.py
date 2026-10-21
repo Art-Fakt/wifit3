@@ -83,7 +83,7 @@ class JobManager:
                     continue
                 if not (tool and (job.log_path or job.api_id)):
                     job.status = ToolStatus.ERROR
-                    job.progress_msg = "Process ended while wifit3 was closed."
+                    job.progress_msg = "Interrupted: wifit3 closed before the job started"
                     changed = True
                     continue
                 res = tool.poll_status(job)

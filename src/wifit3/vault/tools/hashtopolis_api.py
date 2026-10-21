@@ -4,9 +4,9 @@ import base64
 import json
 import urllib.error
 import urllib.request
+from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Iterator
 
 TIMEOUT_SECONDS = 10.0
 WPA_HASH_TYPE_ID = 22000
@@ -136,7 +136,7 @@ class HashtopolisApi:
 
 
 @contextmanager
-def _reply_to(request: str) -> Iterator[None]:
+def _reply_to(request: str) -> Generator[None]:
     try:
         yield
     except (KeyError, TypeError, ValueError, AttributeError):

@@ -135,3 +135,68 @@ async def test_test_finishing_after_cancel_leaves_the_app_running(server, monkey
         await pilot.pause()
 
         assert not isinstance(app.screen, HashtopolisConfigModal)
+
+
+async def test_saved_wordlist_and_group_show_by_name_before_a_refresh(server):
+    Config.hashtopolis.wordlist_id, Config.hashtopolis.wordlist_name = 2, "top1k.txt"
+    Config.hashtopolis.access_group_id = 1
+    Config.hashtopolis.access_group_name = "Default Group"
+    app = _Host()
+    async with app.run_test() as pilot:
+        app.push_screen(HashtopolisConfigModal())
+        await pilot.pause()
+
+        assert app.screen.query_one("#hashtopolis-wordlist", Select).value == 2
+        group = app.screen.query_one("#hashtopolis-access-group", Select)
+        assert group.value == 1 and ("Default Group", 1) in group._options
+        assert str(app.screen.query_one("#hashtopolis-test-result", Label).render()) == ""
+
+
+async def test_status_asks_for_a_refresh_until_wordlists_are_known(server):
+    app = _Host()
+    async with app.run_test() as pilot:
+        app.push_screen(HashtopolisConfigModal())
+        await pilot.pause()
+
+        assert "Refresh to list wordlists" in str(
+            app.screen.query_one("#hashtopolis-test-result", Label).render())
+
+
+async def test_status_counts_wordlists_and_groups(server):
+    app = _Host()
+    async with app.run_test() as pilot:
+        app.push_screen(HashtopolisConfigModal())
+        await pilot.pause(0)
+        await _test_connection(app, pilot)
+
+        assert "Connected · 2 wordlists · 1 group" in str(
+            app.screen.query_one("#hashtopolis-test-result", Label).render())
+
+
+async def test_reveal_toggles_the_access_key(server):
+    app = _Host()
+    async with app.run_test() as pilot:
+        app.push_screen(HashtopolisConfigModal())
+        await pilot.pause()
+        access_key = app.screen.query_one("#hashtopolis-access-key", Input)
+        reveal = app.screen.query_one("#hashtopolis-reveal", Button)
+
+        reveal.press()
+        await pilot.pause()
+        assert not access_key.password and str(reveal.label) == "hide"
+        reveal.press()
+        await pilot.pause()
+        assert access_key.password and str(reveal.label) == "reveal"
+
+
+async def test_confirm_saves_the_access_group_name(server):
+    app = _Host()
+    async with app.run_test() as pilot:
+        app.push_screen(HashtopolisConfigModal(confirm_label="Save"))
+        await pilot.pause(0)
+        await _test_connection(app, pilot)
+        app.screen.query_one("#hashtopolis-wordlist", Select).value = 1
+        app.screen.query_one("#hashtopolis-confirm", Button).press()
+        await pilot.pause(0)
+
+    assert Config.hashtopolis.access_group_name == "Default Group"
