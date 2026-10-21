@@ -23,7 +23,7 @@ async def test_scanner_logs_the_key_of_a_job_cracked_message():
         lines: list = []
         scanner._write_log = lines.append
         job = JobState(job_id="j1", tool_name="cpu_crack", capture_path="x",
-                       status=ToolStatus.SUCCESS, progress_msg="Cracked", automatic=True,
+                       status=ToolStatus.SUCCESS, progress_msg="Cracked", auto_crack=True,
                        display_name="CPU Crack (HomeNet)", key="password1")
 
         scanner.post_message(WifiteApp.JobCracked(job))
@@ -46,6 +46,6 @@ async def test_scanner_logs_auto_crack_status_only_when_it_changes(monkeypatch):
         scanner._log_auto_crack_status_when_changed()
         assert len(lines) == 2 and "enabled" in lines[0] and "CPU Crack" in lines[1]
 
-        monkeypatch.setattr(Config, "auto_crack_tool", None)
+        monkeypatch.setattr(Config, "auto_crack", None)
         scanner._log_auto_crack_status_when_changed()
         assert len(lines) == 3 and "disabled" in lines[2]

@@ -99,24 +99,24 @@ class AutoCrackSetting(VerticalGroup):
 
     def compose(self) -> ComposeResult:
         self.border_title = "Auto-crack captures with"
-        self._chosen = Config.auto_crack_tool or ""
+        self._chosen = Config.auto_crack or ""
         tools = self.app.vault.manager.tools.values()
         options = [("Off", "")] + [(tool.label, tool.name) for tool in tools]
         with Horizontal():
-            yield Select(options, id="auto_crack_tool", value=self._chosen, allow_blank=False)
+            yield Select(options, id="auto_crack", value=self._chosen, allow_blank=False)
             yield Button("⚙", id="auto_crack_configure", compact=True)
 
     def on_mount(self) -> None:
         self.query_one("#auto_crack_configure", Button).display = bool(self._chosen)
 
-    @on(Select.Changed, "#auto_crack_tool")
+    @on(Select.Changed, "#auto_crack")
     def select_tool(self, event: Select.Changed) -> None:
         if event.value == self._chosen:
             return
         previous = self._chosen
         self._choose(str(event.value))
         tool = self.app.vault.manager.tools.get(self._chosen)
-        if tool is not None and tool.unattended_config() is None:
+        if tool is not None and tool.auto_crack_config() is None:
             self._configure(lambda _: self._revert_if_unconfigured(tool, previous))
 
     @on(Button.Pressed, "#auto_crack_configure")
@@ -126,11 +126,11 @@ class AutoCrackSetting(VerticalGroup):
 
     def _choose(self, tool_name: str) -> None:
         self._chosen = tool_name
-        self.query_one("#auto_crack_tool", Select).value = tool_name
+        self.query_one("#auto_crack", Select).value = tool_name
         self.query_one("#auto_crack_configure", Button).display = bool(tool_name)
 
     def _revert_if_unconfigured(self, tool: VaultTool, previous: str) -> None:
-        if tool.unattended_config() is None:
+        if tool.auto_crack_config() is None:
             self._choose(previous)
 
     def _configure(self, on_dismiss: Callable[[dict | None], None] | None = None) -> None:
@@ -202,7 +202,7 @@ class PreferencesModal(ModalScreen):
         Config.captures_dir = self.query_one("#captures_dir", Input).value
         self.app.vault.refresh()
         Config.save_pcap = self.query_one("#save_pcap", Checkbox).value
-        Config.auto_crack_tool = self.query_one(AutoCrackSetting).tool
+        Config.auto_crack = self.query_one(AutoCrackSetting).tool
         Config.scanner_sort_delay = float(self.query_one("#sort_delay", Select).value)
         self._save_and_dismiss()
 

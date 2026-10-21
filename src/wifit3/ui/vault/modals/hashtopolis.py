@@ -59,17 +59,17 @@ class HashtopolisConfigModal(ModalScreen[dict]):
         super().__init__()
         self._confirm_label = confirm_label
         self._wordlists: dict[int, str] = {}
-        if Config.hashtopolis_wordlist_id:
-            self._wordlists[Config.hashtopolis_wordlist_id] = Config.hashtopolis_wordlist_name or ""
+        if Config.hashtopolis.wordlist_id:
+            self._wordlists[Config.hashtopolis.wordlist_id] = Config.hashtopolis.wordlist_name or ""
 
     def compose(self) -> ComposeResult:
         with Vertical(id="hashtopolis-dialog"):
             yield Label("Hashtopolis", id="hashtopolis-title")
             yield Label("Server URL:", classes="hashtopolis-label")
-            yield Input(Config.hashtopolis_url or "", placeholder="http://192.168.1.10:8080",
+            yield Input(Config.hashtopolis.url or "", placeholder="http://192.168.1.10:8080",
                         id="hashtopolis-url")
             yield Label("Access key:", classes="hashtopolis-label")
-            yield Input(Config.hashtopolis_access_key or "", password=True,
+            yield Input(Config.hashtopolis.access_key or "", password=True,
                         id="hashtopolis-access-key")
             yield Label(_ACCESS_KEY_HELP)
             with Horizontal(id="hashtopolis-test-row"):
@@ -78,10 +78,10 @@ class HashtopolisConfigModal(ModalScreen[dict]):
             yield Label("Wordlist:", classes="hashtopolis-label")
             yield Select([(name, file_id) for file_id, name in self._wordlists.items()],
                          prompt="Test the connection to list wordlists",
-                         value=Config.hashtopolis_wordlist_id or Select.NULL,
+                         value=Config.hashtopolis.wordlist_id or Select.NULL,
                          id="hashtopolis-wordlist")
             yield Label("Access group:", classes="hashtopolis-label")
-            group_id = Config.hashtopolis_access_group_id
+            group_id = Config.hashtopolis.access_group_id
             yield Select([(str(group_id), group_id)] if group_id else [],
                          prompt="Test the connection to list access groups",
                          value=group_id or Select.NULL, id="hashtopolis-access-group")
@@ -171,11 +171,11 @@ class HashtopolisConfigModal(ModalScreen[dict]):
                 "access_group_id": group_id}
 
     def _remember(self, url: str, access_key: str, config: dict[str, Any]) -> None:
-        Config.hashtopolis_url = url
-        Config.hashtopolis_access_key = access_key
-        Config.hashtopolis_wordlist_id = config["wordlist_id"]
-        Config.hashtopolis_wordlist_name = config["wordlist_name"]
-        Config.hashtopolis_access_group_id = config["access_group_id"]
+        Config.hashtopolis.url = url
+        Config.hashtopolis.access_key = access_key
+        Config.hashtopolis.wordlist_id = config["wordlist_id"]
+        Config.hashtopolis.wordlist_name = config["wordlist_name"]
+        Config.hashtopolis.access_group_id = config["access_group_id"]
         try:
             Config.save()
         except ConfigError as e:

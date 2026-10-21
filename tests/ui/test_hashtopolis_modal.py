@@ -10,13 +10,6 @@ from wifit3.ui.vault.modals.hashtopolis import HashtopolisConfigModal
 from wifit3.vault.tools.hashtopolis_api import AccessGroup, HashtopolisError, ServerFile
 
 
-@pytest.fixture(autouse=True)
-def _unset_saved_settings(monkeypatch):
-    for name in ("hashtopolis_url", "hashtopolis_access_key", "hashtopolis_wordlist_id",
-                 "hashtopolis_wordlist_name", "hashtopolis_access_group_id"):
-        monkeypatch.setattr(Config, name, None)
-
-
 class _Host(App):
     """A bare app to host the modal (no USB, no splash)."""
 
@@ -106,8 +99,8 @@ async def test_confirm_saves_settings_and_keeps_the_key_out_of_the_job(server):
         await pilot.pause(0)
 
     assert dismissed == [{"wordlist_id": 2, "wordlist_name": "top1k.txt", "access_group_id": 1}]
-    assert (Config.hashtopolis_url, Config.hashtopolis_access_key,
-            Config.hashtopolis_wordlist_name) == ("http://server:8080", "key", "top1k.txt")
+    assert (Config.hashtopolis.url, Config.hashtopolis.access_key,
+            Config.hashtopolis.wordlist_name) == ("http://server:8080", "key", "top1k.txt")
 
 
 async def test_confirm_without_a_wordlist_stays_open(server):

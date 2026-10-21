@@ -6,11 +6,11 @@ from typing import Any, Dict, Iterator, Optional
 
 from wifit3.crack import wpa_psk
 from wifit3.crack.hc22000_format import Hc22000Line, parse_hc22000
-from wifit3.crack.passwords import (DEFAULT_PASSWORDS_PATH, read_passwords, ssid_passwords,
-                                    ssid_variants)
+from wifit3.crack.passwords import read_passwords, ssid_passwords, ssid_variants
 from wifit3.dot11 import wpa
 from wifit3.models import PersistedCapture, ToolCapability, ToolResult, ToolStatus
 from wifit3.models.jobs import JobAction, JobState, ToolName
+from wifit3.persist.config import Config
 from wifit3.vault.tools.cracker import CrackerTool, WordlistQueue, expand_wordlists
 
 
@@ -55,8 +55,8 @@ class CpuCrackTool(CrackerTool[WordlistQueue]):
     def __init__(self) -> None:
         self._runs: Dict[str, _WordlistRun] = {}
 
-    def unattended_config(self) -> Optional[dict[str, Any]]:
-        return {"wordlists": [str(DEFAULT_PASSWORDS_PATH)]}
+    def auto_crack_config(self) -> Optional[dict[str, Any]]:
+        return {"wordlists": list(Config.cpu_crack.wordlists)} if Config.cpu_crack.wordlists else None
 
     def launch(self, job: JobState, capture: PersistedCapture) -> None:
         requested = job.config.get("wordlists") or []

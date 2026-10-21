@@ -9,7 +9,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Label
 
-from wifit3.persist.config import Config, ConfigError
+from wifit3.persist.config import Config, ConfigError, CpuCrackSettings, HashcatSettings
 from wifit3.ui.path_picker import BROWSE_GLYPH, PathPickerModal
 
 
@@ -33,7 +33,7 @@ class WordlistConfigModal(ModalScreen[dict]):
         """``confirm_label`` "Save" configures the tool without the caller launching a job."""
         super().__init__()
         self._confirm_label = confirm_label
-        self._wordlists: list[str] = list(Config.wordlist_paths)
+        self._wordlists: list[str] = list(self._settings().wordlists)
 
     # CSS, not DEFAULT_CSS: the app's `Button { min-width: 12 }` outranks any DEFAULT_CSS rule.
     # No type prefix: each subclass loads this scoped to its own name.
@@ -186,5 +186,9 @@ class WordlistConfigModal(ModalScreen[dict]):
         except ConfigError as e:
             self.notify(str(e), title="Config Error", severity="warning")
 
+    def _settings(self) -> CpuCrackSettings | HashcatSettings:
+        """The Config table this tool's wordlists are saved in."""
+        raise NotImplementedError
+
     def _store_settings(self, config: dict[str, Any]) -> None:
-        Config.wordlist_paths = list(config["wordlists"])
+        self._settings().wordlists = list(config["wordlists"])

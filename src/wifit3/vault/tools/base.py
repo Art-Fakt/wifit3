@@ -27,8 +27,8 @@ class VaultTool(ABC):
         are what the job will accept until the next poll."""
         pass
 
-    def unattended_config(self) -> Optional[dict[str, Any]]:
-        """The ``job.config`` an automatic job runs with, from saved settings; None until configured."""
+    def auto_crack_config(self) -> Optional[dict[str, Any]]:
+        """The ``job.config`` auto-crack runs with, from saved settings; None until configured."""
         return None
 
     def apply(self, action: JobAction, job: JobState) -> bool:

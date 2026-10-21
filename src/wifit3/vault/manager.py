@@ -111,7 +111,7 @@ class JobManager:
             self._save()
 
     def submit_job(self, tool_name: str, capture: PersistedCapture, config: dict,
-                   automatic: bool = False) -> str:
+                   auto_crack: bool = False) -> str:
         """Submit a job. It will be marked QUEUED and launched on the next poll if slots are free."""
         job_id = f"{tool_name}_{Path(capture.path).name}_{int(time.time())}"
         
@@ -125,7 +125,7 @@ class JobManager:
             status=ToolStatus.QUEUED,
             progress_msg="Waiting in queue...",
             config=config,
-            automatic=automatic,
+            auto_crack=auto_crack,
         )
         self.jobs[job_id] = job
         logger.info(f"Submitted job {job}")

@@ -64,11 +64,11 @@ def server(monkeypatch):
     fake = FakeApi()
     monkeypatch.setattr(ht, "HashtopolisApi", lambda url, access_key: fake)
     monkeypatch.setattr(ht, "POLL_SECONDS", 0.01)
-    monkeypatch.setattr(Config, "hashtopolis_url", "http://server:8080")
-    monkeypatch.setattr(Config, "hashtopolis_access_key", "key")
-    monkeypatch.setattr(Config, "hashtopolis_wordlist_id", None)
-    monkeypatch.setattr(Config, "hashtopolis_wordlist_name", None)
-    monkeypatch.setattr(Config, "hashtopolis_access_group_id", None)
+    monkeypatch.setattr(Config.hashtopolis, "url", "http://server:8080")
+    monkeypatch.setattr(Config.hashtopolis, "access_key", "key")
+    monkeypatch.setattr(Config.hashtopolis, "wordlist_id", None)
+    monkeypatch.setattr(Config.hashtopolis, "wordlist_name", None)
+    monkeypatch.setattr(Config.hashtopolis, "access_group_id", None)
     return fake
 
 
@@ -198,7 +198,7 @@ def test_job_on_another_server_is_not_adopted(server, tmp_path, monkeypatch):
 
 
 def test_launch_records_the_server_but_not_the_access_key(server, tmp_path, monkeypatch):
-    monkeypatch.setattr(Config, "hashtopolis_access_key", "SECRET-ACCESS-KEY")
+    monkeypatch.setattr(Config.hashtopolis, "access_key", "SECRET-ACCESS-KEY")
     tool, capture = ht.HashtopolisTool(), _capture(tmp_path, _PMKID)
     job = _job(capture)
     tool.launch(job, capture)
@@ -242,13 +242,13 @@ def test_ft_only_capture_is_not_crackable(server, tmp_path):
     assert ht.HashtopolisTool().can_crack(_capture(tmp_path, _EAPOL))
 
 
-def test_unattended_config_needs_server_wordlist_and_group(server, monkeypatch):
-    assert ht.HashtopolisTool().unattended_config() is None
-    monkeypatch.setattr(Config, "hashtopolis_wordlist_id", 1)
-    monkeypatch.setattr(Config, "hashtopolis_wordlist_name", "rockyou.txt")
-    monkeypatch.setattr(Config, "hashtopolis_access_group_id", 2)
+def test_auto_crack_config_needs_server_wordlist_and_group(server, monkeypatch):
+    assert ht.HashtopolisTool().auto_crack_config() is None
+    monkeypatch.setattr(Config.hashtopolis, "wordlist_id", 1)
+    monkeypatch.setattr(Config.hashtopolis, "wordlist_name", "rockyou.txt")
+    monkeypatch.setattr(Config.hashtopolis, "access_group_id", 2)
 
-    assert ht.HashtopolisTool().unattended_config() == {
+    assert ht.HashtopolisTool().auto_crack_config() == {
         "wordlist_id": 1, "wordlist_name": "rockyou.txt", "access_group_id": 2}
 
 

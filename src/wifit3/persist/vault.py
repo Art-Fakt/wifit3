@@ -221,16 +221,16 @@ class Vault:
 
     def _auto_crack(self, ap: "AccessPoint", capture: PersistedCapture,
                     before: List[Hc22000Line]) -> None:
-        tool = self.manager.tools.get(Config.auto_crack_tool) if Config.auto_crack_tool else None
+        tool = self.manager.tools.get(Config.auto_crack) if Config.auto_crack else None
         if tool is None or self.has_psk(ap) or not tool.can_crack(capture):
             return
-        config = tool.unattended_config()
+        config = tool.auto_crack_config()
         if config is None:
             return
         if crosses_auto_crack_threshold(before, self._hc_lines(ap)):
             self.manager.submit_job(tool.name, capture,
                                     {**config, "extra_passwords": sorted(self._probed_ssids_source())},
-                                    automatic=True)
+                                    auto_crack=True)
 
     def save_wep_key(self, ap: "AccessPoint", key: bytes) -> Optional[SaveResult]:
         result = save.save_wep_key(ap, key)

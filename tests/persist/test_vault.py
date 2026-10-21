@@ -356,7 +356,7 @@ _CLIENT = "11:22:33:44:55:66"
 def _auto_crack_call(capture, extra_passwords: list[str] | None = None) -> tuple:
     return (("cpu_crack", capture, {"wordlists": [str(DEFAULT_PASSWORDS_PATH)],
                                     "extra_passwords": extra_passwords or []}),
-            {"automatic": True})
+            {"auto_crack": True})
 
 
 def test_save_submits_cpu_crack_once_per_threshold(tmp_path, mocker):
@@ -391,7 +391,7 @@ def test_auto_crack_snapshots_probed_ssids_sorted(tmp_path, mocker):
 
 
 def test_save_does_not_submit_when_auto_crack_is_off(tmp_path, mocker, monkeypatch):
-    monkeypatch.setattr(Config, "auto_crack_tool", None)
+    monkeypatch.setattr(Config, "auto_crack", None)
     v = Vault()
     mocker.patch.object(v.manager, "submit_job")
 
@@ -412,10 +412,10 @@ def test_save_does_not_submit_when_the_psk_is_known(tmp_path, mocker):
 
 
 def test_save_submits_to_the_chosen_tool_with_its_saved_settings(tmp_path, mocker, monkeypatch):
-    monkeypatch.setattr(Config, "auto_crack_tool", ToolName.HASHCAT)
-    monkeypatch.setattr(Config, "hashcat_path", "/usr/bin/hashcat")
-    monkeypatch.setattr(Config, "wordlist_paths", ["/lists/a.txt"])
-    monkeypatch.setattr(Config, "hashcat_args", "-w 3")
+    monkeypatch.setattr(Config, "auto_crack", ToolName.HASHCAT)
+    monkeypatch.setattr(Config.hashcat, "path", "/usr/bin/hashcat")
+    monkeypatch.setattr(Config.hashcat, "wordlists", ["/lists/a.txt"])
+    monkeypatch.setattr(Config.hashcat, "args", "-w 3")
     v = Vault()
     mocker.patch.object(v.manager, "submit_job")
 
@@ -425,12 +425,12 @@ def test_save_submits_to_the_chosen_tool_with_its_saved_settings(tmp_path, mocke
     assert v.manager.submit_job.call_args == (
         ("hashcat", capture, {"hashcat_exe": "/usr/bin/hashcat", "wordlists": ["/lists/a.txt"],
                               "hashcat_args": "-w 3", "extra_passwords": []}),
-        {"automatic": True})
+        {"auto_crack": True})
 
 
 def test_save_does_not_submit_to_an_unconfigured_tool(tmp_path, mocker, monkeypatch):
-    monkeypatch.setattr(Config, "auto_crack_tool", ToolName.HASHCAT)
-    monkeypatch.setattr(Config, "hashcat_path", None)
+    monkeypatch.setattr(Config, "auto_crack", ToolName.HASHCAT)
+    monkeypatch.setattr(Config.hashcat, "path", None)
     v = Vault()
     mocker.patch.object(v.manager, "submit_job")
 

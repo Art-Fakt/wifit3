@@ -58,16 +58,16 @@ class HashtopolisTool(VaultTool):
     def can_crack(self, capture: PersistedCapture) -> bool:
         return capture.path.endswith(".hc22000") and bool(uploadable_hashlines(capture.path))
 
-    def unattended_config(self) -> Optional[dict[str, Any]]:
-        if not (Config.hashtopolis_url and Config.hashtopolis_access_key
-                and Config.hashtopolis_wordlist_id and Config.hashtopolis_access_group_id):
+    def auto_crack_config(self) -> Optional[dict[str, Any]]:
+        settings = Config.hashtopolis
+        if not (settings.url and settings.access_key
+                and settings.wordlist_id and settings.access_group_id):
             return None
-        return {"wordlist_id": Config.hashtopolis_wordlist_id,
-                "wordlist_name": Config.hashtopolis_wordlist_name or "",
-                "access_group_id": Config.hashtopolis_access_group_id}
+        return {"wordlist_id": settings.wordlist_id, "wordlist_name": settings.wordlist_name or "",
+                "access_group_id": settings.access_group_id}
 
     def launch(self, job: JobState, capture: PersistedCapture) -> None:
-        if not (Config.hashtopolis_url and Config.hashtopolis_access_key):
+        if not (Config.hashtopolis.url and Config.hashtopolis.access_key):
             raise ValueError("Hashtopolis server URL and access key are not set")
         hashlines = uploadable_hashlines(capture.path)
         if not hashlines:
@@ -110,7 +110,7 @@ class HashtopolisTool(VaultTool):
 
     def _new_run(self, job: JobState) -> _ServerRun:
         wordlist = ServerFile(int(job.config["wordlist_id"]), str(job.config["wordlist_name"]))
-        api = HashtopolisApi(str(Config.hashtopolis_url), str(Config.hashtopolis_access_key))
+        api = HashtopolisApi(str(Config.hashtopolis.url), str(Config.hashtopolis.access_key))
         return _ServerRun(api=api, wordlist=wordlist)
 
     def _start(self, job: JobState, run: _ServerRun, name: str, hashlines: list[str]) -> None:
@@ -166,4 +166,4 @@ class HashtopolisTool(VaultTool):
 
 
 def _configured_server() -> Optional[str]:
-    return user_api_endpoint(Config.hashtopolis_url) if Config.hashtopolis_url else None
+    return user_api_endpoint(Config.hashtopolis.url) if Config.hashtopolis.url else None

@@ -76,11 +76,11 @@ class HashcatTool(CrackerTool[HashcatQueue]):
     def __init__(self) -> None:
         self._procs: Dict[int, subprocess.Popen] = {}
 
-    def unattended_config(self) -> Optional[dict[str, Any]]:
-        if not (Config.hashcat_path and Config.wordlist_paths):
+    def auto_crack_config(self) -> Optional[dict[str, Any]]:
+        if not (Config.hashcat.path and Config.hashcat.wordlists):
             return None
-        return {"hashcat_exe": Config.hashcat_path, "wordlists": list(Config.wordlist_paths),
-                "hashcat_args": Config.hashcat_args or ""}
+        return {"hashcat_exe": Config.hashcat.path, "wordlists": list(Config.hashcat.wordlists),
+                "hashcat_args": Config.hashcat.args or ""}
 
     def launch(self, job: JobState, capture: PersistedCapture) -> None:
         hashcat_exe = job.config.get("hashcat_exe")

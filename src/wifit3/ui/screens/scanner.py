@@ -492,7 +492,7 @@ class ScannerView(Screen):
                 color="orange1"))
 
     def _log_auto_crack_status_when_changed(self) -> None:
-        tool_name = Config.auto_crack_tool or ""
+        tool_name = Config.auto_crack or ""
         if tool_name == self._logged_auto_crack_tool:
             return
         self._logged_auto_crack_tool = tool_name

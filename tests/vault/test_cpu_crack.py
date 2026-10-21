@@ -9,6 +9,7 @@ from wifit3.dot11 import wpa
 from wifit3.models import PersistedCapture, ToolResult, ToolStatus
 from wifit3.models.access_point import CaptureType
 from wifit3.models.jobs import JobAction, JobState
+from wifit3.persist.config import Config
 from wifit3.vault.tools.cpu_crack import CpuCrackTool
 
 # hashcat wiki example_hashes, mode 22000 (password "hashcat!", essid "hashcat-essid").
@@ -209,3 +210,14 @@ def test_cpu_crack_refuses_pause_once_the_worker_has_ended(tool, tmp_path):
 def test_cpu_crack_launch_rejects_a_capture_without_hashlines(tool, tmp_path):
     with pytest.raises(ValueError):
         _launch(tool, tmp_path, ["not a hashline"], [["wrongpass1"]])
+
+
+def test_auto_crack_config_uses_the_saved_cpu_crack_wordlists():
+    Config.cpu_crack.wordlists = ["/dicts/small.txt"]
+    Config.hashcat.wordlists = ["/dicts/rockyou.txt"]
+    assert CpuCrackTool().auto_crack_config() == {"wordlists": ["/dicts/small.txt"]}
+
+
+def test_auto_crack_config_is_none_without_cpu_crack_wordlists():
+    Config.cpu_crack.wordlists = []
+    assert CpuCrackTool().auto_crack_config() is None
