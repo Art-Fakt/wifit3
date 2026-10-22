@@ -4,13 +4,15 @@ from textual.app import ComposeResult
 from textual.containers import Container, Horizontal
 from textual.widgets import Footer, DataTable, Input
 from textual.screen import ModalScreen
-from textual import events, on
+from textual import events, on, work
 from textual.binding import Binding
 
 from .vault_table import VaultTable
 from .vault_item import VaultItemView
+from wifit3.models import AccessPoint, CaptureType
 from wifit3.persist.meta import meta_path, read_meta, update_meta
 from wifit3.ui.vault.job_pane import JobTrackerPane
+from wifit3.ui.vault.modals.add_credential import AddCredentialModal, ManualCredential
 from wifit3.ui.vault.modals.nickname import NicknameModal
 
 class VaultDrawer(ModalScreen):
@@ -23,6 +25,7 @@ class VaultDrawer(ModalScreen):
         Binding("escape", "dismiss_drawer", "Close", show=True),
         Binding("f", "focus_search", "Search", show=True),
         Binding("/", "focus_search", "Search", show=False),
+        Binding("a", "add_credential", "Add", show=True),
         Binding("n", "set_nickname", "Nickname", show=True),
         Binding("z", "export_zip", "Export Zip", show=True),
         Binding("o", "show_directory", "Show Dir", show=True),
@@ -131,32 +134,78 @@ class VaultDrawer(ModalScreen):
         if aps.row_count == 0:
             return None, ""
         bssid = aps.coordinate_to_cell_key(aps.cursor_coordinate).row_key.value or ""
-        entry = self.query_one("#vault-table", VaultTable)._aps.get(bssid)
-        return (entry[0] if entry else None), bssid
+        return self.app.vault.saved_ssid(bssid), bssid
 
     def action_set_nickname(self) -> None:
         ssid, bssid = self._selected_network()
         if not bssid:
             self.notify("Select an AP first", severity="warning")
             return
-        meta = read_meta(meta_path(ssid, bssid))
-        nickname = meta.get("nickname")
+        nickname = read_meta(meta_path(ssid, bssid)).get("nickname")
         current = nickname if isinstance(nickname, str) else ""
-        meta_ssid = meta.get("ssid")
-        real_ssid = meta_ssid if isinstance(meta_ssid, str) else ssid   # row SSIDs are filename-safe
 
         def _save(value: Optional[str]) -> None:
             if value is None:
                 return
             try:
-                update_meta(real_ssid, bssid, nickname=value or None)
+                update_meta(ssid, bssid, nickname=value or None)
             except OSError as exc:
                 self.notify(f"Could not save nickname: {exc}", severity="error")
                 return
             self.query_one("#vault-table", VaultTable).reload_nicknames()
             self.notify("Nickname saved" if value else "Nickname cleared")
 
-        self.app.push_screen(NicknameModal(real_ssid, current), _save)
+        self.app.push_screen(NicknameModal(ssid, current), _save)
+
+    def action_add_credential(self) -> None:
+        ssid, bssid = self._selected_network()
+        self.app.push_screen(AddCredentialModal(ssid or "", bssid), self._credential_added)
+
+    def _credential_added(self, credential: Optional[ManualCredential]) -> None:
+        if credential is None:
+            return
+        vault = self.app.vault
+        ap = AccessPoint(bssid=credential.bssid, ssid=credential.ssid)
+        verified = False
+        try:
+            if credential.kind == CaptureType.WPA_PSK:
+                verification = vault.verify_wpa_psk(ap.bssid, credential.value)
+                if verification is False:
+                    self.notify("PSK does not match the saved handshake", severity="error")
+                    return
+                verified = verification is True
+                result = vault.save_wpa_psk(ap.ssid, ap.bssid, credential.value)
+                if result is not None:
+                    self._propagate_psk(ap.bssid, ap.ssid, credential.value)
+            elif credential.kind == CaptureType.WPS_PIN:
+                result = vault.save_wps_pin(ap, credential.value, None)
+            else:
+                value = credential.value
+                key = bytes.fromhex(value) if len(value) in (10, 26) else value.encode("ascii")
+                result = vault.save_wep_key(ap, key)
+        except OSError as exc:
+            self.notify(f"Could not save credential: {exc}", severity="error")
+            return
+        if result is None:
+            self.notify("Credential could not be saved", severity="error")
+        elif not result.was_new:
+            self.notify("Credential is already in Vault", severity="warning")
+        elif verified:
+            self.notify("Credential verified and added to Vault")
+        else:
+            self.notify("Credential added to Vault")
+
+    @work(thread=True)
+    def _propagate_psk(self, bssid: str, ssid: str, psk: str) -> None:
+        try:
+            matched = self.app.vault.propagate_verified_psk(bssid, ssid, psk)
+        except OSError as exc:
+            self.app.call_from_thread(
+                self.notify, f"Could not save a related AP's PSK: {exc}", severity="warning")
+            return
+        if matched:
+            self.app.call_from_thread(
+                self.notify, f"PSK also verified and saved for {len(matched)} related APs")
 
     def action_export_zip(self) -> None:
         try:

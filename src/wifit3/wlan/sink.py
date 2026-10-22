@@ -403,7 +403,7 @@ class WlanSink:
         return bool(ssid) and ssid != "<hidden>"
 
     @staticmethod
-    def _mac_octets(mac: str) -> Optional[bytes]:
+    def mac_octets(mac: str) -> Optional[bytes]:
         """The six octets of an ``aa:bb:..``-form MAC, or None if malformed."""
         parts = mac.split(":")
         if len(parts) != 6:
@@ -414,7 +414,7 @@ class WlanSink:
             return None
 
     @classmethod
-    def _is_sibling(cls, a: bytes, b: bytes) -> bool:
+    def is_sibling(cls, a: bytes, b: bytes) -> bool:
         """Same-radio heuristic: MACs differ within SIBLING_BIT_DIFF_MAX bits, or one octet."""
         bit_diff = byte_diff = 0
         for x, y in zip(a, b):
@@ -435,15 +435,15 @@ class WlanSink:
             if other is not None and bssid in other.siblings:
                 other.siblings.remove(bssid)
 
-        octets = self._mac_octets(bssid)
+        octets = self.mac_octets(bssid)
         new_siblings: List[str] = []
         if octets is not None:
             channel = ap.channel
             for other_bssid, other_ap in self.access_points.items():
                 if other_bssid == bssid or other_ap.channel != channel:
                     continue
-                other_octets = self._mac_octets(other_bssid)
-                if other_octets is not None and self._is_sibling(octets, other_octets):
+                other_octets = self.mac_octets(other_bssid)
+                if other_octets is not None and self.is_sibling(octets, other_octets):
                     new_siblings.append(other_bssid)
                     if bssid not in other_ap.siblings:
                         other_ap.siblings.append(bssid)

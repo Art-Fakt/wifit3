@@ -4,13 +4,14 @@ The autouse _captures_to_tmp fixture points Config.captures_dir at tmp_path, and
 import pytest
 from textual.widgets import Button, DataTable, Input
 
-from wifit3.models import AccessPoint
+from wifit3.models import AccessPoint, CaptureType
 from wifit3.models.jobs import JobState, ToolStatus
 from wifit3.persist.meta import meta_path, read_meta, update_meta
 from wifit3.persist.save import SaveResult
 from wifit3.ui.app import WifiteApp
 from wifit3.ui.screens.vault_drawer import VaultDrawer
 from wifit3.ui.screens.vault_item import ConfirmModal, _CapturePanel
+from wifit3.ui.vault.modals.add_credential import AddCredentialModal, ManualCredential
 from wifit3.ui.vault.modals.nickname import NicknameModal
 
 _HS_LINE = "WPA*02*" + "0" * 32 + "*aabbccddeeff*112233445566*5465737431***2\n"
@@ -203,6 +204,53 @@ async def test_nickname_shows_in_the_row_and_title_and_n_edits_it(tmp_path):
         await pilot.press("f", "d", "e", "n")
         await pilot.pause()
         assert table.row_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_usb_devices")
+async def test_add_credential_prefills_the_row_and_rejects_a_psk_the_handshake_refutes(
+        tmp_path, mocker):
+    _write(tmp_path, "HomeNet_aa-bb-cc-dd-ee-ff.hc22000", _PMKID_LINE)
+    app = WifiteApp()
+    async with app.run_test() as pilot:
+        view = await _open_vault(app)
+        await pilot.pause()
+        verify = mocker.patch.object(app.vault, "verify_wpa_psk", return_value=False)
+        notify = mocker.patch.object(view, "notify")
+
+        await pilot.press("a")
+        await pilot.pause()
+        modal = app.screen
+        assert isinstance(modal, AddCredentialModal)
+        assert modal.query_one("#ssid", Input).value == "HomeNet"
+        assert modal.query_one("#bssid", Input).value == "aa:bb:cc:dd:ee:ff"
+        modal.query_one("#value", Input).focus()
+        modal.query_one("#value", Input).value = "wrongpass"
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert app.screen is view
+        verify.assert_called_once_with("aa:bb:cc:dd:ee:ff", "wrongpass")
+        assert notify.call_args.kwargs["severity"] == "error"
+        assert not app.vault.has_psk(AccessPoint(bssid="aa:bb:cc:dd:ee:ff"))
+
+        verify.return_value = True
+        propagate = mocker.patch.object(app.vault, "propagate_verified_psk",
+                                        return_value=["02:00:00:00:00:10"])
+        view._credential_added(ManualCredential(CaptureType.WPA_PSK, "HomeNet",
+                                                "aa:bb:cc:dd:ee:ff", "rightpass"))
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert app.vault.known_psk(AccessPoint(bssid="aa:bb:cc:dd:ee:ff")) == "rightpass"
+        propagate.assert_called_once_with("aa:bb:cc:dd:ee:ff", "HomeNet", "rightpass")
+        assert [c.args[0] for c in notify.call_args_list[-2:]] == [
+            "Credential verified and added to Vault",
+            "PSK also verified and saved for 1 related APs"]
+
+        view._credential_added(ManualCredential(CaptureType.WPS_PIN, "Other",
+                                                "02:00:00:00:00:20", "1234"))
+        pin = app.vault.persisted("02:00:00:00:00:20")[0]
+        assert pin.pin == "1234" and pin.value is None
 
 
 @pytest.mark.asyncio
