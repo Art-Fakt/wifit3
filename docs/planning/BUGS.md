@@ -152,3 +152,9 @@ hashcat and is missed by CPU Crack.
 
 Measured: correction costs 1.09x (one byte order) to 1.19x (both) CPU per password; 70 of 71 local
 EAPOL lines have the NC bit set. Not implemented: no real-world miss observed yet.
+
+## Vault Verify from Focus leaves the card on the AP's channel
+
+**Problem.** In Focus, open the Vault, select a cracked AP on a different channel than the Focus
+target, press `Verify`: the card retunes to that AP's channel to verify, but doesn't return to the
+Focus channel. The Focus target's beacons stay at 0 until the Vault is closed, then come back.
