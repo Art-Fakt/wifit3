@@ -23,7 +23,6 @@ from textual.widgets import Button, Label, Select
 
 from wifit3.campaigns.pin import EMPTY_PIN_LABEL
 from wifit3.models import CaptureType, PersistedCapture
-from wifit3.ui.vault.modals.wordlists import WordlistConfigModal
 from wifit3.ui.vault.tools_ui import UI_TOOLS
 
 
@@ -311,9 +310,8 @@ class _CapturePanel(VerticalGroup):
                 tool_name, cap, self.app.vault.add_probed_ssids(config))
             self.notify(f"Queued job: {job_id}")
             
-        modal = (modal_cls(capture=cap, probed_ssids=self.app.vault.probed_ssids())
-                 if issubclass(modal_cls, WordlistConfigModal) else modal_cls())
-        self.app.push_screen(modal, _on_config)
+        self.app.push_screen(modal_cls(capture=cap, probed_ssids=self.app.vault.probed_ssids()),
+                             _on_config)
 
     @on(Button.Pressed, ".open-dir")
     def _open_dir(self, event: Button.Pressed) -> None:

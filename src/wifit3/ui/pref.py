@@ -17,7 +17,6 @@ from textual.widgets import Button, Checkbox, Input, Label, Select
 from wifit3.models import ToolName
 from wifit3.persist.config import Config
 from wifit3.ui.path_picker import PathInput
-from wifit3.ui.vault.modals.wordlists import WordlistConfigModal
 from wifit3.ui.vault.tools_ui import UI_TOOLS
 from wifit3.vault.tools.base import VaultTool
 
@@ -138,9 +137,8 @@ class AutoCrackSetting(VerticalGroup):
         modal = UI_TOOLS.get(ToolName(self._chosen)) if self._chosen else None
         if modal is None:
             return
-        screen = (modal(confirm_label="Save", probed_ssids=self.app.vault.probed_ssids())
-                  if issubclass(modal, WordlistConfigModal) else modal(confirm_label="Save"))
-        self.app.push_screen(screen, on_dismiss)
+        self.app.push_screen(modal(confirm_label="Save",
+                                   probed_ssids=self.app.vault.probed_ssids()), on_dismiss)
 
     @property
     def tool(self) -> ToolName | None:

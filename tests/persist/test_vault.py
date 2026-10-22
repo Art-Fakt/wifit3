@@ -585,9 +585,22 @@ def test_propagate_saves_only_related_aps_it_verifies_without_a_psk(tmp_path):
     assert v.known_psk(AccessPoint(bssid="02:00:00:00:00:40")) == "kept"
 
 
-def test_saved_ssid_prefers_the_meta_over_the_filename(tmp_path):
-    _write_wpa_psk(tmp_path, "02-00-00-00-00-40", ssid="Caf_", psk="pw")
+def test_delete_capture_removes_the_meta_of_a_loaded_capture_with_a_real_ssid(tmp_path):
+    (tmp_path / "Caf__02-00-00-00-00-40_1700000001_wpa_psk.txt").write_text(
+        "SSID: Café\nBSSID: x\nPSK: pw\n", encoding="utf-8")
+    meta = update_meta("Café", "02:00:00:00:00:40", nickname="kitchen")
     v = Vault()
-    assert v.saved_ssid("02:00:00:00:00:40") == "Caf_"
-    update_meta("Café", "02:00:00:00:00:40")
-    assert v.saved_ssid("02:00:00:00:00:40") == "Café"
+    capture = v.persisted("02:00:00:00:00:40")[0]
+    assert capture.ssid == "Café" and meta == tmp_path / "Caf__02-00-00-00-00-40.meta"
+    v.delete_capture(capture)
+    assert not meta.exists()
+
+
+def test_ssid_prefers_a_capture_holding_the_real_ssid_over_a_newer_pcap(tmp_path):
+    (tmp_path / "Caf__02-00-00-00-00-50_1700000001_wpa_psk.txt").write_text(
+        "SSID: Café\nBSSID: x\nPSK: pw\n", encoding="utf-8")
+    (tmp_path / "Caf__02-00-00-00-00-50_1700000009_handshake.pcap").write_bytes(b"")
+    v = Vault()
+    assert v.persisted("02:00:00:00:00:50")[0].path.endswith(".pcap")
+    assert v.ssid("02:00:00:00:00:50") == "Café"
+    assert v.ssid("02:00:00:00:00:99") is None

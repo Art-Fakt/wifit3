@@ -105,13 +105,11 @@ class VaultTable(Widget):
         self.reload_table()
 
     def _group_aps(self) -> Dict[str, Tuple[Optional[str], List[PersistedCapture]]]:
-        groups: Dict[str, Tuple[Optional[str], List[PersistedCapture]]] = {}
+        captures_by_bssid: Dict[str, List[PersistedCapture]] = {}
         for cap in self.app.vault.all_captures():
-            ssid, caps = groups.setdefault(cap.bssid, (None, []))
-            caps.append(cap)
-            if ssid is None and cap.ssid:
-                groups[cap.bssid] = (cap.ssid, caps)
-        return groups
+            captures_by_bssid.setdefault(cap.bssid, []).append(cap)
+        return {bssid: (self.app.vault.ssid(bssid), caps)
+                for bssid, caps in captures_by_bssid.items()}
 
     def reload_table(self) -> None:
         if self._is_reloading:

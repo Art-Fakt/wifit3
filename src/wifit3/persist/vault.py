@@ -21,7 +21,7 @@ from wifit3.persist import save
 from wifit3.persist.capture_history import load_capture_index, summarize
 from wifit3.persist.common import LEGACY_CAPTURE_RE, bssid_to_dashed, safe_ssid
 from wifit3.persist.config import Config
-from wifit3.persist.meta import meta_path, read_meta, update_meta
+from wifit3.persist.meta import meta_path, update_meta
 from wifit3.persist.save import SaveResult
 from wifit3.vault.manager import JobManager
 from wifit3.wlan.sink import WlanSink
@@ -159,6 +159,12 @@ class Vault:
         """This AP's saved captures, newest-first (empty if none)."""
         return self._index.get(bssid, [])
 
+    def ssid(self, bssid: str) -> Optional[str]:
+        """The AP's SSID; a .pcap only knows the filename-safe form, so any other capture wins."""
+        captures = self.persisted(bssid)
+        return next((c.ssid for c in captures if c.ssid and not c.path.endswith(".pcap")),
+                    next((c.ssid for c in captures if c.ssid), None))
+
     def all_captures(self) -> List[PersistedCapture]:
         """Every saved capture across all APs, unordered (callers sort as needed)."""
         return [c for caps in self._index.values() for c in caps]
@@ -214,12 +220,6 @@ class Vault:
         """True once we hold this AP's passphrase (see known_psk)."""
         return self.known_psk(ap) is not None
 
-    def saved_ssid(self, bssid: str) -> Optional[str]:
-        """The AP's real SSID from its .meta, else the filename-safe one from its captures."""
-        ssid = next((c.ssid for c in self.persisted(bssid) if c.ssid), None)
-        meta_ssid = read_meta(meta_path(ssid, bssid)).get("ssid")
-        return meta_ssid if isinstance(meta_ssid, str) else ssid
-
     def verify_wpa_psk(self, bssid: str, psk: str) -> Optional[bool]:
         """Check a PSK or 64-hex raw PMK against the AP's saved hashlines. False only if a
         non-M1+M2 line rejects it (M1+M2 may hold a wrong passphrase); None if unverifiable."""
@@ -258,7 +258,7 @@ class Vault:
                 continue
             if any(c.type in self._PSK_TYPES and c.value for c in captures):
                 continue
-            ssid = self.saved_ssid(bssid)
+            ssid = self.ssid(bssid)
             if not ((source_ssid and ssid and _related_ssids(source_ssid, ssid))
                     or _sibling_bssids(source_bssid, bssid)):
                 continue

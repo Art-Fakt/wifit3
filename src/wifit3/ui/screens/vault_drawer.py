@@ -134,7 +134,8 @@ class VaultDrawer(ModalScreen):
         if aps.row_count == 0:
             return None, ""
         bssid = aps.coordinate_to_cell_key(aps.cursor_coordinate).row_key.value or ""
-        return self.app.vault.saved_ssid(bssid), bssid
+        entry = self.query_one("#vault-table", VaultTable)._aps.get(bssid)
+        return (entry[0] if entry is not None else None), bssid
 
     def action_set_nickname(self) -> None:
         ssid, bssid = self._selected_network()
