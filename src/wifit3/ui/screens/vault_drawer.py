@@ -2,7 +2,7 @@ from typing import Optional
 
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal
-from textual.widgets import Footer, DataTable
+from textual.widgets import Footer, DataTable, Input
 from textual.screen import ModalScreen
 from textual import events, on
 from textual.binding import Binding
@@ -19,6 +19,8 @@ class VaultDrawer(ModalScreen):
     BINDINGS = [
         Binding("v", "dismiss_drawer", "Close", show=False),
         Binding("escape", "dismiss_drawer", "Close", show=True),
+        Binding("f", "focus_search", "Search", show=True),
+        Binding("/", "focus_search", "Search", show=False),
         Binding("z", "export_zip", "Export Zip", show=True),
         Binding("o", "show_directory", "Show Dir", show=True),
         Binding("q", "app.quit", "Quit", show=True),
@@ -67,6 +69,9 @@ class VaultDrawer(ModalScreen):
             self.query_one("#vault-aps", DataTable).focus()
         except Exception:
             pass
+
+    def action_focus_search(self) -> None:
+        self.query_one("#vault-search", Input).focus()
 
     def action_dismiss_drawer(self) -> None:
         try:

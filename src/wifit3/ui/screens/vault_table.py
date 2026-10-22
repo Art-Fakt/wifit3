@@ -1,13 +1,53 @@
-from typing import Dict, List, Optional, Tuple
+import unicodedata
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from rich.text import Text
 from textual import on
 from textual.app import ComposeResult
-from textual.widgets import DataTable, Tabs, Tab
+from textual.binding import Binding
+from textual.containers import Horizontal
+from textual.widgets import DataTable, Input, Tabs, Tab
 from textual.widget import Widget
 
 from wifit3.models import CaptureType, PersistedCapture
 from textual.message import Message
+
+
+def _search_forms(value: str) -> tuple[str, str]:
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    ascii_form = "".join(
+        character
+        for character in unicodedata.normalize("NFKD", normalized)
+        if not unicodedata.combining(character) and character.isascii()
+    )
+    return normalized, ascii_form
+
+
+def matches_search(query: str, fields: Iterable[str]) -> bool:
+    """True when ``query`` is in any field, ignoring case, width and accents."""
+    query_form, ascii_query = _search_forms(query)
+    for field in fields:
+        normalized, ascii_form = _search_forms(field)
+        if query_form in normalized or ascii_query and ascii_query in ascii_form:
+            return True
+    return False
+
+
+class VaultSearchBar(Horizontal):
+    """The Vault's search input; Esc and Enter return focus to the AP list."""
+
+    BINDINGS = [Binding("escape", "leave", "", show=False)]
+
+    def compose(self) -> ComposeResult:
+        yield Input(placeholder="SSID, BSSID, or filename", id="vault-search", compact=True)
+
+    def action_leave(self) -> None:
+        self.screen.query_one("#vault-aps", DataTable).focus()
+
+    def on_input_submitted(self) -> None:
+        self.action_leave()
+
 
 class VaultTable(Widget):
     """The ESSID Table for the Vault drawer."""
@@ -23,6 +63,16 @@ class VaultTable(Widget):
         border-title-color: $primary;
         border-title-style: bold;
     }
+    VaultTable #vault-search-bar {
+        height: auto;
+        padding: 0 1;
+        border: round $primary;
+        border-title-color: $primary;
+        border-title-style: bold;
+    }
+    VaultTable #vault-search {
+        width: 1fr;
+    }
     VaultTable Tabs {
         margin-bottom: 0;
     }
@@ -35,9 +85,13 @@ class VaultTable(Widget):
         super().__init__(id=id)
         self._aps: Dict[str, Tuple[Optional[str], List[PersistedCapture]]] = {}
         self._current_tab = "tab-all"
+        self._search_query = ""
         self._is_reloading = False
 
     def compose(self) -> ComposeResult:
+        search_bar = VaultSearchBar(id="vault-search-bar")
+        search_bar.border_title = "SEARCH"
+        yield search_bar
         yield Tabs(id="vault-tabs")
         yield DataTable(id="vault-aps", show_header=False, cursor_type="row")
 
@@ -118,6 +172,10 @@ class VaultTable(Widget):
             
             # Populate current tab
             for bssid, (ssid, caps) in rows:
+                if self._search_query and not matches_search(
+                        self._search_query,
+                        [ssid or "", bssid, *(Path(c.path).name for c in caps)]):
+                    continue
                 # Check filter
                 if self._current_tab == "tab-psk" and not any(c.type in (CaptureType.WPS_PIN, CaptureType.WPS_PBC, CaptureType.WPA_PSK) and c.value for c in caps): continue
                 if self._current_tab == "tab-wep" and not any(c.type == CaptureType.WEP for c in caps): continue
@@ -165,6 +223,13 @@ class VaultTable(Widget):
             return table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
         except Exception:
             return None
+
+    @on(Input.Changed, "#vault-search")
+    def _on_search_changed(self, event: Input.Changed) -> None:
+        query = event.value.strip()
+        if query != self._search_query:
+            self._search_query = query
+            self.reload_table()
 
     @on(Tabs.TabActivated, "#vault-tabs")
     def _on_tab_activated(self, event: Tabs.TabActivated) -> None:

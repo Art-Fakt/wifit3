@@ -2,7 +2,7 @@
 The autouse _captures_to_tmp fixture points Config.captures_dir at tmp_path, and WifiteApp builds its Vault from there.
 """
 import pytest
-from textual.widgets import Button, DataTable
+from textual.widgets import Button, DataTable, Input
 
 from wifit3.models import AccessPoint
 from wifit3.models.jobs import JobState, ToolStatus
@@ -142,13 +142,34 @@ async def test_vault_keeps_emoji_named_mac_octets_literal(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("no_usb_devices")
-async def test_open_vault_focuses_ap_list(tmp_path):
+async def test_open_vault_focuses_ap_list_and_search_returns_to_it(tmp_path):
     _write(tmp_path, "HomeNet_aa-bb-cc-dd-ee-ff_1000_wep_key.txt", _WEP_TXT)
+    _write(tmp_path, "Cafe_11-22-33-44-55-66_1000_wep_key.txt", _WEP_TXT)
     app = WifiteApp()
     async with app.run_test() as pilot:
         view = await _open_vault(app)
         await pilot.pause()
-        assert app.focused is view.query_one("#vault-aps", DataTable)
+        table = view.query_one("#vault-aps", DataTable)
+        search = view.query_one("#vault-search", Input)
+        assert app.focused is table
+
+        await pilot.press("f")
+        assert app.focused is search
+        await pilot.press("h", "o", "m", "e")
+        await pilot.pause()
+        assert search.value == "home" and table.row_count == 1
+        await pilot.press("escape")
+        assert app.focused is table and app.screen is view
+
+        await pilot.press("/")
+        assert app.focused is search
+        await pilot.press("backspace", "backspace", "backspace", "backspace", "enter")
+        await pilot.pause()
+        assert app.focused is table and table.row_count == 2
+
+        await pilot.press("escape")
+        await pilot.pause(0.4)
+        assert app.screen is not view
 
 
 @pytest.mark.asyncio
