@@ -73,8 +73,9 @@ class HashcatQueue(WordlistQueue):
     def chosen_wordlists(self) -> list[str]:
         return [path for path in self.wordlists if path != self.ssid_passwords_path]
 
-    def wordlist_name(self, path: str) -> str:
-        return "SSID passwords" if path == self.ssid_passwords_path else super().wordlist_name(path)
+    @property
+    def current_name(self) -> str:
+        return "SSID passwords" if self.current == self.ssid_passwords_path else super().current_name
 
 
 class HashcatTool(CrackerTool[HashcatQueue]):
@@ -116,17 +117,19 @@ class HashcatTool(CrackerTool[HashcatQueue]):
         wordlists = list(dict.fromkeys(wordlists))
         essid_passwords = (capture_ssid_variants(job.capture_path)
                            if job.config.get("ap_ssid_passwords") else [])
-        first_passwords = list(dict.fromkeys(
+        ssid_based_passwords = list(dict.fromkeys(
             essid_passwords + ssid_passwords(job.config.get("extra_passwords", []))))
-        if not (first_passwords or wordlists):
+        if not (ssid_based_passwords or wordlists):
             raise ValueError("No passwords to try: choose a wordlist or a password source")
         queue = HashcatQueue(wordlists=wordlists, ssid=capture.ssid or "", bssid=capture.bssid,
                              hashline_ids=capture_hashline_ids(job.capture_path),
                              identities=[wordlist_identity(path) for path in wordlists])
-        if first_passwords:
-            queue.ssid_passwords_path = self._write_ssid_passwords(first_passwords)
-            queue.wordlists.insert(0, queue.ssid_passwords_path)
-            queue.identities.insert(0, SSID_VARIANTS_IDENTITY if essid_passwords else "")
+        if ssid_based_passwords:
+            ssid_passwords_index = 1 if job.config.get("default_passwords") else 0
+            queue.ssid_passwords_path = self._write_ssid_passwords(ssid_based_passwords)
+            queue.wordlists.insert(ssid_passwords_index, queue.ssid_passwords_path)
+            queue.identities.insert(ssid_passwords_index,
+                                    SSID_VARIANTS_IDENTITY if essid_passwords else "")
         try:
             potfile = self._potfile(job.capture_path)
             if potfile and os.path.exists(potfile):

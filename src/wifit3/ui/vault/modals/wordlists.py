@@ -38,11 +38,9 @@ def _ssid_variants_per_ssid() -> int:
 class _PasswordSourceCounts:
     default_passwords: int
     ap_ssid_passwords: Optional[int]        # None without a capture: shown per SSID
-    probed_ssid_passwords: int
 
 
-def _count_password_sources(capture: Optional[PersistedCapture],
-                            probed_ssids: Sequence[str]) -> _PasswordSourceCounts:
+def _count_password_sources(capture: Optional[PersistedCapture]) -> _PasswordSourceCounts:
     ap_ssid_passwords = None
     if capture is not None:
         try:
@@ -51,8 +49,7 @@ def _count_password_sources(capture: Optional[PersistedCapture],
             ap_ssid_passwords = 0
     return _PasswordSourceCounts(
         default_passwords=sum(1 for _ in read_passwords(DEFAULT_PASSWORDS_PATH)),
-        ap_ssid_passwords=ap_ssid_passwords,
-        probed_ssid_passwords=len(ssid_passwords(probed_ssids)))
+        ap_ssid_passwords=ap_ssid_passwords)
 
 
 def _read_exhaustion(capture: PersistedCapture) -> dict[str, Exhaustion]:
@@ -99,7 +96,7 @@ class WordlistConfigModal(ModalScreen[dict]):
         super().__init__()
         self._confirm_label = confirm_label
         self._capture = capture
-        self._probed_ssids = probed_ssids
+        self._probed_ssid_passwords = len(ssid_passwords(probed_ssids))
         self._exhaustion: dict[str, Exhaustion] = {}
         self._wordlists: list[str] = list(self._settings().wordlists)
 
@@ -188,7 +185,9 @@ class WordlistConfigModal(ModalScreen[dict]):
                        tooltip="Passwords based on the AP's SSID: cases, leetspeak, separators, "
                                "common suffixes and numbers 0-9999",
                        id="ap-ssid-passwords")
-        yield Checkbox("Probed SSIDs", value=settings.probed_ssid_passwords,
+        yield Checkbox(f"Probed SSIDs ({self._probed_ssid_passwords:,})",
+                       value=settings.probed_ssid_passwords and self._probed_ssid_passwords > 0,
+                       disabled=not self._probed_ssid_passwords,
                        tooltip="Passwords based on SSIDs probed this session (clients may "
                                "mistype the PSK into the SSID field)",
                        id="probed-ssid-passwords")
@@ -199,8 +198,7 @@ class WordlistConfigModal(ModalScreen[dict]):
 
     @work
     async def _show_counts_and_exhaustion(self) -> None:
-        counts = await asyncio.to_thread(_count_password_sources, self._capture,
-                                         self._probed_ssids)
+        counts = await asyncio.to_thread(_count_password_sources, self._capture)
         try:
             default = self.query_one("#default-passwords", Checkbox)
         except NoMatches:   # dismissed while counting
@@ -210,8 +208,6 @@ class WordlistConfigModal(ModalScreen[dict]):
         ap_ssid = (f"{counts.ap_ssid_passwords:,}" if counts.ap_ssid_passwords is not None
                    else f"about {_ssid_variants_per_ssid():,} per SSID")
         self.query_one("#ap-ssid-passwords", Checkbox).label = f"This AP's SSID variants ({ap_ssid})"
-        self.query_one("#probed-ssid-passwords", Checkbox).label = (
-            f"Probed SSIDs ({counts.probed_ssid_passwords:,})")
         if self._capture is not None:
             self._exhaustion = await asyncio.to_thread(_read_exhaustion, self._capture)
             self._mark_exhausted()
@@ -324,4 +320,5 @@ class WordlistConfigModal(ModalScreen[dict]):
         settings.wordlists = list(config["wordlists"])
         settings.default_passwords = config["default_passwords"]
         settings.ap_ssid_passwords = config["ap_ssid_passwords"]
-        settings.probed_ssid_passwords = config["probed_ssid_passwords"]
+        if self._probed_ssid_passwords:     # disabled: keep the choice for when there are probes
+            settings.probed_ssid_passwords = config["probed_ssid_passwords"]

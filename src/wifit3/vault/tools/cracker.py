@@ -44,8 +44,7 @@ class WordlistQueue:
     ssid: str = ""                  # the capture's SSID and BSSID, naming its .meta
     bssid: str = ""
     hashline_ids: list[str] = field(default_factory=list)      # the capture's, at launch
-    identities: list[str] = field(default_factory=list)        # per wordlist; "" records nothing
-    ssid_variants_identity: str = ""    # CPU Crack: tried in memory before wordlist 0
+    identities: list[str] = field(default_factory=list)        # per queue entry; "" records nothing
 
     @classmethod
     def from_job(cls, job: JobState) -> Self:
@@ -60,23 +59,29 @@ class WordlistQueue:
         return self.wordlists[self.index] if 0 <= self.index < len(self.wordlists) else None
 
     @property
+    def entry_count(self) -> int:
+        return len(self.wordlists)
+
+    @property
     def has_next(self) -> bool:
-        return self.index + 1 < len(self.wordlists)
+        return self.index + 1 < self.entry_count
 
     @property
     def chosen_wordlists(self) -> list[str]:
         """The wordlists the job was given, without any file wifit3 wrote for it."""
         return self.wordlists
 
-    def wordlist_name(self, path: str) -> str:
-        return Path(path).name
+    @property
+    def current_name(self) -> str:
+        return Path(self.current).name if self.current else ""
 
     @property
     def label(self) -> str:
-        """Current file (``rockyou.txt``), with its position when there are several:
+        """Current entry (``rockyou.txt``), with its position when there are several:
         ``rockyou.txt (3/16)``."""
-        name = self.wordlist_name(self.current) if self.current else ""
-        return f"{name} ({self.index + 1}/{len(self.wordlists)})" if len(self.wordlists) > 1 else name
+        if self.entry_count > 1:
+            return f"{self.current_name} ({self.index + 1}/{self.entry_count})"
+        return self.current_name
 
 
 QueueT = TypeVar("QueueT", bound=WordlistQueue)
@@ -157,10 +162,7 @@ class CrackerTool(VaultTool, Generic[QueueT]):
 
     @staticmethod
     def _record_exhausted(queue: WordlistQueue) -> None:
-        identities = queue.identities[queue.index:queue.index + 1]
-        if queue.index == 0:
-            identities.append(queue.ssid_variants_identity)
-        for identity in filter(None, identities):
+        for identity in filter(None, queue.identities[queue.index:queue.index + 1]):
             try:
                 record_exhausted(queue.ssid or None, queue.bssid, identity, queue.hashline_ids)
             except OSError:

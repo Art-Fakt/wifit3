@@ -54,10 +54,11 @@ def test_saved_path_outranks_a_hashcat_found_on_path(monkeypatch):
 
 def test_launching_remembers_the_launch_settings():
     """Straight through the real Config.save(): tests/ui/conftest.py points it at a tmp file."""
-    HashcatConfigModal()._remember({"hashcat_exe": r"D:\hashcat.exe",
-                                    "wordlists": [r"D:\rockyou.txt", r"D:\top29m.txt"],
-                                    "hashcat_args": "-w 3", "default_passwords": False,
-                                    "ap_ssid_passwords": True, "probed_ssid_passwords": False})
+    modal = HashcatConfigModal(probed_ssids=["CafeGuest"])
+    modal._remember({"hashcat_exe": r"D:\hashcat.exe",
+                     "wordlists": [r"D:\rockyou.txt", r"D:\top29m.txt"],
+                     "hashcat_args": "-w 3", "default_passwords": False,
+                     "ap_ssid_passwords": True, "probed_ssid_passwords": False})
     Config.hashcat = HashcatSettings()
     Config.load()
 
@@ -106,7 +107,7 @@ async def test_saved_args_prefill_the_modal_and_come_back_on_launch():
     app = _Host()
     async with app.run_test() as pilot:
         dismissed = []
-        app.push_screen(HashcatConfigModal(), dismissed.append)
+        app.push_screen(HashcatConfigModal(probed_ssids=["CafeGuest"]), dismissed.append)
         await pilot.pause(0)
         assert app.screen.query_one("#hashcat-self-test-disable", Checkbox).value
         app.screen.query_one("#hashcat-exe", Input).value = r"D:\hashcat.exe"
@@ -245,7 +246,7 @@ async def test_cpu_crack_launches_with_only_the_wordlists_and_remembers_them():
     app = _Host()
     async with app.run_test() as pilot:
         dismissed = []
-        app.push_screen(CpuCrackConfigModal(), dismissed.append)
+        app.push_screen(CpuCrackConfigModal(probed_ssids=["CafeGuest"]), dismissed.append)
         await pilot.pause()
         assert str(app.screen.query_one("#wordlist-title", Label).content) == "CPU Crack"
         assert not app.screen.query("#hashcat-exe")
@@ -257,6 +258,22 @@ async def test_cpu_crack_launches_with_only_the_wordlists_and_remembers_them():
                           "ap_ssid_passwords": True, "probed_ssid_passwords": True}]
     assert Config.cpu_crack.wordlists == [r"D:\a.txt", r"D:\b.txt"]
     assert Config.hashcat.wordlists == []
+
+
+async def test_no_probed_ssids_disables_their_box_but_keeps_the_saved_choice():
+    Config.cpu_crack.probed_ssid_passwords = True
+    app = _Host()
+    async with app.run_test() as pilot:
+        dismissed = []
+        app.push_screen(CpuCrackConfigModal(confirm_label="Save"), dismissed.append)
+        await pilot.pause(0)
+        probed = app.screen.query_one("#probed-ssid-passwords", Checkbox)
+        assert (probed.value, probed.disabled, str(probed.label)) == (False, True, "Probed SSIDs (0)")
+        app.screen.query_one("#wordlist-launch", Button).press()
+        await pilot.pause(0)
+
+    assert dismissed[0]["probed_ssid_passwords"] is False
+    assert Config.cpu_crack.probed_ssid_passwords is True
 
 
 async def test_cpu_crack_refuses_to_launch_without_a_wordlist_or_password_source():

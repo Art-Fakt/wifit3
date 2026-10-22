@@ -299,7 +299,7 @@ def _sources_job(tmp_path, wordlists, **sources) -> JobState:
                         **sources})
 
 
-def test_launch_runs_the_ssid_passwords_then_the_default_passwords_first(tmp_path, mocker):
+def test_launch_runs_the_default_passwords_then_the_ssid_passwords_first(tmp_path, mocker):
     wordlist = tmp_path / "rockyou.txt"
     wordlist.write_text("one\n")
     spawn = _fake_spawn(mocker)
@@ -312,15 +312,18 @@ def test_launch_runs_the_ssid_passwords_then_the_default_passwords_first(tmp_pat
     ssid_passwords_path = Path(job.tool_state["ssid_passwords_path"])
     assert ssid_passwords_path.parent == Path(tempfile.gettempdir())
     assert ssid_passwords_path.name.startswith("wifit3-")
-    assert job.tool_state["wordlists"] == [str(ssid_passwords_path),
-                                           str(DEFAULT_PASSWORDS_PATH.resolve()),
+    assert job.tool_state["wordlists"] == [str(DEFAULT_PASSWORDS_PATH.resolve()),
+                                           str(ssid_passwords_path),
                                            str(wordlist.resolve())]
     assert ssid_passwords_path.read_text(encoding="utf-8").splitlines() == list(dict.fromkeys(
         ssid_variants("ab") + ssid_passwords(["CafeGuest"])))
-    assert spawn.call_args.args[0][-1] == str(ssid_passwords_path)
+    assert spawn.call_args.args[0][-1] == str(DEFAULT_PASSWORDS_PATH.resolve())
     assert job.tool_state["identities"] == [
-        SSID_VARIANTS_IDENTITY, wordlist_identity(DEFAULT_PASSWORDS_PATH), wordlist_identity(wordlist)]
-    assert tool.poll_status(job).detail == "SSID passwords (1/3)"
+        wordlist_identity(DEFAULT_PASSWORDS_PATH), SSID_VARIANTS_IDENTITY, wordlist_identity(wordlist)]
+    assert tool.poll_status(job).detail == "default_passwords.txt (1/3)"
+
+    job.tool_state["index"] = 1
+    assert tool.poll_status(job).detail == "SSID passwords (2/3)"
 
     job.tool_state["index"] = 2
     _append(job.log_path, '{ "status": 5, "progress": [3, 3] }\n')
