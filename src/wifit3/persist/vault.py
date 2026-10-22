@@ -414,8 +414,11 @@ class Vault:
         return save_as
 
     def open_directory(self) -> None:
-        """Reveal captures/ in the OS file manager."""
-        _open_in_file_manager(Path(Config.captures_dir))
+        """Reveal captures/ in the OS file manager; FileNotFoundError before the first capture."""
+        captures_dir = Path(Config.captures_dir)
+        if not captures_dir.is_dir():
+            raise FileNotFoundError(f"No captures dir: {captures_dir}")
+        _open_in_file_manager(captures_dir)
 
     # ----- legacy .hc22000 consolidation (temporary: pre-aggregate installs) ---
 

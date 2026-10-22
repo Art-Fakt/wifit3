@@ -222,5 +222,7 @@ class VaultDrawer(ModalScreen):
     def action_show_directory(self) -> None:
         try:
             self.app.vault.open_directory()
+        except FileNotFoundError:
+            self.notify("No captures yet", severity="warning")
         except OSError as exc:
             self.notify(f"Could not open captures dir: {exc}", severity="error")

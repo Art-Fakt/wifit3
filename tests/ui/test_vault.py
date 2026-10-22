@@ -208,6 +208,21 @@ async def test_nickname_shows_in_the_row_and_title_and_n_edits_it(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("no_usb_devices")
+async def test_show_directory_warns_when_there_are_no_captures_yet(tmp_path, mocker):
+    app = WifiteApp()
+    async with app.run_test() as pilot:
+        view = await _open_vault(app)
+        await pilot.pause()
+        mocker.patch.object(app.vault, "open_directory", side_effect=FileNotFoundError)
+        notify = mocker.patch.object(view, "notify")
+
+        view.action_show_directory()
+
+        notify.assert_called_once_with("No captures yet", severity="warning")
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_usb_devices")
 async def test_add_credential_prefills_the_row_and_rejects_a_psk_the_handshake_refutes(
         tmp_path, mocker):
     _write(tmp_path, "HomeNet_aa-bb-cc-dd-ee-ff.hc22000", _PMKID_LINE)

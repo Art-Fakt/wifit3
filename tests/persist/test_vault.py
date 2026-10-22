@@ -347,6 +347,16 @@ def test_open_directory_uses_platform_launcher(tmp_path, mocker):
     popen.assert_called_once_with(["xdg-open", str(tmp_path)])
 
 
+def test_open_directory_raises_file_not_found_before_the_first_capture(tmp_path, mocker,
+                                                                      monkeypatch):
+    mocker.patch.object(sys, "platform", "linux")
+    popen = mocker.patch("wifit3.persist.vault.subprocess.Popen")
+    monkeypatch.setattr(Config, "captures_dir", str(tmp_path / "captures"))
+    with pytest.raises(FileNotFoundError):
+        Vault().open_directory()
+    popen.assert_not_called()
+
+
 def test_capture_payload_value_then_file(tmp_path):
     v = Vault()
     ap = _ap_with_hs()

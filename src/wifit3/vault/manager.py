@@ -64,6 +64,9 @@ class JobManager:
 
     def _save(self) -> None:
         jobs_file = self.get_jobs_file()
+        if not self.jobs:
+            jobs_file.unlink(missing_ok=True)
+            return
         data = {k: v.to_dict() for k, v in self.jobs.items()}
         logger.debug(f"Saving {len(data.keys())} jobs to {jobs_file}")
         jobs_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
