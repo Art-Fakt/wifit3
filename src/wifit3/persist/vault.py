@@ -188,7 +188,7 @@ class Vault:
         return self._has(ap.bssid, CaptureType.WEP)
 
     def has_wps_psk(self, ap: "AccessPoint") -> bool:
-        return any(c.type in (CaptureType.WPS_PIN, CaptureType.WPS_PBC)
+        return any(c.type in (CaptureType.WPS_PIN, CaptureType.WPS_PBC) and c.value
                    for c in self.persisted(ap.bssid))
 
     def wps_capture(self, ap: "AccessPoint") -> Optional[PersistedCapture]:
@@ -252,7 +252,8 @@ class Vault:
                 bssid=ap.bssid, value=key.hex(), ssid=ap.ssid))
         return result
 
-    def save_wps_pin(self, ap: "AccessPoint", pin: str, psk: str) -> Optional[SaveResult]:
+    def save_wps_pin(self, ap: "AccessPoint", pin: str,
+                     psk: Optional[str]) -> Optional[SaveResult]:
         result = save.save_wps_pin(ap, pin, psk)
         if result:
             update_meta(ap.ssid, ap.bssid)

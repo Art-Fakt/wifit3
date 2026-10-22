@@ -173,6 +173,15 @@ def test_non_wps_persisted_is_not_a_psk(tmp_path):
     assert v.has_psk(ap) is False and v.known_psk(ap) is None
 
 
+def test_a_pin_only_capture_is_not_a_psk(tmp_path):
+    ap = AccessPoint(bssid="00:11:22:33:44:99", ssid="Net")
+    Vault().save_wps_pin(ap, "12345670", None)
+    v = Vault()
+    caps = v.persisted(ap.bssid)
+    assert len(caps) == 1 and caps[0].pin == "12345670" and caps[0].value is None
+    assert not v.has_psk(ap) and not v.has_wps_psk(ap) and v.summary() is None
+
+
 def test_known_psk_from_cracked_wpa_psk_file(tmp_path):
     _write_wpa_psk(tmp_path, "00-11-22-33-44-aa", psk="crackedpw")
     v = Vault()

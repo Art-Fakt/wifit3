@@ -1243,7 +1243,7 @@ class FocusViewV2(Screen):
                 f"\"{escape(camp.state.found_psk or '')}\" [/black bold on green]"))
             try:
                 result = self.app.vault.save_wps_pin(
-                    camp.target, camp.state.found_pin, camp.state.found_psk or "")
+                    camp.target, camp.state.found_pin, camp.state.found_psk)
                 if result is None:
                     self._log(treelog.leaf("[dim](save failed)[/dim]"))
                 else:

@@ -166,5 +166,6 @@ def summarize(index: Dict[str, List[PersistedCapture]]) -> tuple[int, int, int, 
         hs += CaptureType.HS in types
         pmkid += CaptureType.PMKID in types
         wep += CaptureType.WEP in types
-        psk += bool(types & {CaptureType.WPS_PIN, CaptureType.WPS_PBC, CaptureType.WPA_PSK})
+        psk += any(c.type in (CaptureType.WPS_PIN, CaptureType.WPS_PBC, CaptureType.WPA_PSK)
+                   and c.value for c in caps)
     return hs, pmkid, wep, psk
