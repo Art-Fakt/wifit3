@@ -10,6 +10,7 @@ from wifit3.models import PersistedCapture, ToolResult, ToolStatus
 from wifit3.models.access_point import CaptureType
 from wifit3.models.jobs import JobAction, JobState
 from wifit3.persist.config import Config
+from wifit3.vault.exhaustion import SSID_VARIANTS_IDENTITY, capture_exhaustion, wordlist_identity
 from wifit3.vault.tools.cpu_crack import CpuCrackTool
 
 # hashcat wiki example_hashes, mode 22000 (password "hashcat!", essid "hashcat-essid").
@@ -281,3 +282,17 @@ def test_a_job_with_no_password_source_refuses_to_launch(tool, tmp_path):
     with pytest.raises(ValueError, match="No passwords to try"):
         _launch_with(tool, tmp_path, [_HASHCAT_PMKID_LINE], default_passwords=False,
                      ap_ssid_passwords=False)
+
+
+def test_an_exhausted_run_records_its_wordlist_and_the_ssid_variants_for_the_hashlines(tool,
+                                                                                     tmp_path):
+    wordlist = _write(tmp_path / "words.txt", ["unrelated"])
+    job = _launch_with(tool, tmp_path, [_UNCRACKABLE_SHORT_ESSID_LINE], wordlists=[wordlist],
+                       ap_ssid_passwords=True, default_passwords=False)
+    assert _poll_finished(tool, job).status == ToolStatus.FAILURE
+
+    capture = PersistedCapture(type=CaptureType.PMKID, timestamp=0, path=job.capture_path,
+                               bssid="fc:69:0c:15:82:64")
+    exhausted = capture_exhaustion(capture)
+    assert set(exhausted) == {wordlist_identity(wordlist), SSID_VARIANTS_IDENTITY}
+    assert all((e.exhausted_hashlines, e.hashlines) == (1, 1) for e in exhausted.values())

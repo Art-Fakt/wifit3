@@ -1,3 +1,4 @@
+import logging
 from abc import abstractmethod
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
@@ -7,7 +8,10 @@ from wifit3.crack.hc22000_format import parse_hc22000
 from wifit3.crack.passwords import ssid_variants
 from wifit3.models import PersistedCapture, ToolResult, ToolStatus
 from wifit3.models.jobs import JobAction, JobState
+from wifit3.vault.exhaustion import record_exhausted
 from wifit3.vault.tools.base import VaultTool
+
+logger = logging.getLogger(__name__)
 
 
 def expand_wordlists(wordlist_paths: list[str]) -> list[str]:
@@ -37,6 +41,11 @@ class WordlistQueue:
     index: int = 0
     stopped: bool = False
     skipping_wordlist: bool = False
+    ssid: str = ""                  # the capture's SSID and BSSID, naming its .meta
+    bssid: str = ""
+    hashline_ids: list[str] = field(default_factory=list)      # the capture's, at launch
+    identities: list[str] = field(default_factory=list)        # per wordlist; "" records nothing
+    ssid_variants_identity: str = ""    # CPU Crack: tried in memory before wordlist 0
 
     @classmethod
     def from_job(cls, job: JobState) -> Self:
@@ -133,6 +142,8 @@ class CrackerTool(VaultTool, Generic[QueueT]):
         when it ended without a stop, a skip or exhausting the wordlist."""
         if queue.stopped:
             return ToolResult(status=ToolStatus.STOPPED, value="Stopped by user")
+        if exhausted and not queue.skipping_wordlist:
+            self._record_exhausted(queue)
         if queue.skipping_wordlist and queue.has_next:
             queue.skipping_wordlist = False
             self._start_next_wordlist(job, queue)
@@ -143,6 +154,17 @@ class CrackerTool(VaultTool, Generic[QueueT]):
         if exhausted:
             return self._exhausted(queue)
         return None
+
+    @staticmethod
+    def _record_exhausted(queue: WordlistQueue) -> None:
+        identities = queue.identities[queue.index:queue.index + 1]
+        if queue.index == 0:
+            identities.append(queue.ssid_variants_identity)
+        for identity in filter(None, identities):
+            try:
+                record_exhausted(queue.ssid or None, queue.bssid, identity, queue.hashline_ids)
+            except OSError:
+                logger.warning(f"Could not record {identity} as exhausted", exc_info=True)
 
     def _start_next_wordlist(self, job: JobState, queue: QueueT) -> None:
         queue.index += 1

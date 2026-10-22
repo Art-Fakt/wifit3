@@ -14,6 +14,8 @@ from wifit3.crack.passwords import DEFAULT_PASSWORDS_PATH, ssid_passwords
 from wifit3.models import PersistedCapture, ToolCapability, ToolResult, ToolStatus
 from wifit3.models.jobs import JobAction, JobState, ToolName
 from wifit3.persist.config import Config
+from wifit3.vault.exhaustion import (SSID_VARIANTS_IDENTITY, capture_hashline_ids,
+                                     wordlist_identity)
 from wifit3.vault.tools import hashcat_keypress
 from wifit3.vault.tools.cracker import (CrackerTool, WordlistQueue, capture_ssid_variants,
                                         expand_wordlists)
@@ -111,16 +113,20 @@ class HashcatTool(CrackerTool[HashcatQueue]):
             raise ValueError(f"Wordlist not found: {', '.join(requested)}")
         if job.config.get("default_passwords"):
             wordlists.insert(0, str(DEFAULT_PASSWORDS_PATH.resolve()))
-        queue = HashcatQueue(wordlists=list(dict.fromkeys(wordlists)))
+        wordlists = list(dict.fromkeys(wordlists))
         essid_passwords = (capture_ssid_variants(job.capture_path)
                            if job.config.get("ap_ssid_passwords") else [])
         first_passwords = list(dict.fromkeys(
             essid_passwords + ssid_passwords(job.config.get("extra_passwords", []))))
-        if not (first_passwords or queue.wordlists):
+        if not (first_passwords or wordlists):
             raise ValueError("No passwords to try: choose a wordlist or a password source")
+        queue = HashcatQueue(wordlists=wordlists, ssid=capture.ssid or "", bssid=capture.bssid,
+                             hashline_ids=capture_hashline_ids(job.capture_path),
+                             identities=[wordlist_identity(path) for path in wordlists])
         if first_passwords:
             queue.ssid_passwords_path = self._write_ssid_passwords(first_passwords)
             queue.wordlists.insert(0, queue.ssid_passwords_path)
+            queue.identities.insert(0, SSID_VARIANTS_IDENTITY if essid_passwords else "")
         try:
             potfile = self._potfile(job.capture_path)
             if potfile and os.path.exists(potfile):

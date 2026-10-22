@@ -1,3 +1,5 @@
+import time
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -8,9 +10,11 @@ import wifit3.ui.vault.modals.hashcat as mod
 from wifit3.crack.passwords import DEFAULT_PASSWORDS_PATH, read_passwords, ssid_passwords, ssid_variants
 from wifit3.models import CaptureType, PersistedCapture
 from wifit3.persist.config import Config, ConfigError, HashcatSettings
+from wifit3.persist.meta import update_meta
 from wifit3.ui.vault.modals.cpu_crack import CpuCrackConfigModal
 from wifit3.ui.vault.modals.hashcat import HashcatConfigModal, _default_hashcat_path
 from wifit3.ui.vault.modals.wordlists import _RemoveButton
+from wifit3.vault.exhaustion import hashline_id, wordlist_identity
 
 
 @pytest.fixture(autouse=True)
@@ -311,3 +315,35 @@ async def test_password_source_labels_count_the_capture_or_one_ssid_and_the_prob
             assert labels == [f"Default passwords ({default_count:,})", ssid_label,
                               f"Probed SSIDs ({len(ssid_passwords(['CafeGuest']))})"]
             app.pop_screen()
+
+
+async def test_exhausted_wordlists_and_sources_are_marked_with_when_and_on_how_many(tmp_path):
+    lines = [f"WPA*01*{'00' * 16}*020000000001*02000000000{n}*6162***" for n in (2, 3)]
+    capture = tmp_path / "ab_02-00-00-00-00-01.hc22000"
+    capture.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
+    persisted = PersistedCapture(type=CaptureType.PMKID, timestamp=0, path=str(capture),
+                                 bssid="02:00:00:00:00:01", ssid="ab")
+    exhausted_list, fresh_list = tmp_path / "exhausted.txt", tmp_path / "fresh.txt"
+    exhausted_list.write_text("password1\n", encoding="utf-8")
+    fresh_list.write_text("password2\npassword3\n", encoding="utf-8")
+    Config.cpu_crack.wordlists = [str(exhausted_list), str(fresh_list)]
+    when = int(time.time()) - 3 * 86400 - 60
+    ids = [hashline_id(line) for line in lines]
+    update_meta("ab", "02:00:00:00:00:01", exhausted={
+        wordlist_identity(exhausted_list): {ids[0]: when},
+        wordlist_identity(DEFAULT_PASSWORDS_PATH): {ids[0]: when - 60, ids[1]: when}})
+    date = datetime.fromtimestamp(when).strftime("%Y-%m-%d")
+    app = _Host()
+    async with app.run_test() as pilot:
+        modal = CpuCrackConfigModal(capture=persisted)
+        app.push_screen(modal)
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        exhausted_row, fresh_row = modal.query(".wordlist-row")
+        default = modal.query_one("#default-passwords", Checkbox)
+        assert exhausted_row.has_class("exhausted") and default.has_class("exhausted")
+        assert not fresh_row.has_class("exhausted")
+        assert exhausted_row.styles.background != fresh_row.styles.background
+        assert not modal.query_one("#ap-ssid-passwords", Checkbox).has_class("exhausted")
+        assert exhausted_row.tooltip == f"Exhausted {date} (3 days ago) on 1/2 hashlines"
+        assert default.tooltip == f"Exhausted {date} (3 days ago) on 2/2 hashlines"

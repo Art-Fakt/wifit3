@@ -11,6 +11,8 @@ from wifit3.dot11 import wpa
 from wifit3.models import PersistedCapture, ToolCapability, ToolResult, ToolStatus
 from wifit3.models.jobs import JobAction, JobState, ToolName
 from wifit3.persist.config import Config
+from wifit3.vault.exhaustion import (SSID_VARIANTS_IDENTITY, capture_hashline_ids,
+                                     wordlist_identity)
 from wifit3.vault.tools.cracker import (CrackerTool, WordlistQueue, capture_ssid_variants,
                                         expand_wordlists)
 
@@ -73,7 +75,13 @@ class CpuCrackTool(CrackerTool[WordlistQueue]):
             raise ValueError(f"Wordlist not found: {', '.join(requested)}")
         if job.config.get("default_passwords"):
             wordlists.insert(0, str(DEFAULT_PASSWORDS_PATH.resolve()))
-        self._start_wordlist(job, WordlistQueue(wordlists=list(dict.fromkeys(wordlists))))
+        wordlists = list(dict.fromkeys(wordlists))
+        include_ssid_variants = job.config.get("ap_ssid_passwords", True)
+        self._start_wordlist(job, WordlistQueue(
+            wordlists=wordlists, ssid=capture.ssid or "", bssid=capture.bssid,
+            hashline_ids=capture_hashline_ids(job.capture_path),
+            identities=[wordlist_identity(path) for path in wordlists],
+            ssid_variants_identity=SSID_VARIANTS_IDENTITY if include_ssid_variants else ""))
 
     def _start_wordlist(self, job: JobState, queue: WordlistQueue) -> None:
         lines_by_essid = _lines_by_essid(job.capture_path)

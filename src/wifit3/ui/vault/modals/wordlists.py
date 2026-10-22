@@ -1,6 +1,8 @@
 import asyncio
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from functools import cache
 from pathlib import Path
 from typing import Any, ClassVar, Optional
@@ -12,6 +14,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.css.query import NoMatches
 from textual.screen import ModalScreen
+from textual.widget import Widget
 from textual.widgets import Button, Checkbox, Label
 
 from wifit3.crack.passwords import (DEFAULT_PASSWORDS_PATH, read_passwords, ssid_passwords,
@@ -19,6 +22,8 @@ from wifit3.crack.passwords import (DEFAULT_PASSWORDS_PATH, read_passwords, ssid
 from wifit3.models import PersistedCapture
 from wifit3.persist.config import Config, ConfigError, CpuCrackSettings, HashcatSettings
 from wifit3.ui.path_picker import BROWSE_GLYPH, PathPickerModal
+from wifit3.vault.exhaustion import (SSID_VARIANTS_IDENTITY, Exhaustion, capture_exhaustion,
+                                     wordlist_identity)
 from wifit3.vault.tools.cracker import capture_ssid_variants
 
 _EXAMPLE_SSID = "HomeWifi"
@@ -50,6 +55,27 @@ def _count_password_sources(capture: Optional[PersistedCapture],
         probed_ssid_passwords=len(ssid_passwords(probed_ssids)))
 
 
+def _read_exhaustion(capture: PersistedCapture) -> dict[str, Exhaustion]:
+    try:
+        return capture_exhaustion(capture)
+    except OSError:
+        return {}
+
+
+def _file_identity(path: str | Path) -> Optional[str]:
+    try:
+        return wordlist_identity(path) if Path(path).is_file() else None
+    except OSError:
+        return None
+
+
+def _exhausted_tooltip(exhaustion: Exhaustion) -> str:
+    date = datetime.fromtimestamp(exhaustion.latest).strftime("%Y-%m-%d")
+    days = int(time.time() - exhaustion.latest) // 86400
+    return (f"Exhausted {date} ({days} days ago) on "
+            f"{exhaustion.exhausted_hashlines}/{exhaustion.hashlines} hashlines")
+
+
 class _RemoveButton(Button):
     """The `X` beside one chosen wordlist; ``path`` is the wordlist it removes."""
 
@@ -74,12 +100,14 @@ class WordlistConfigModal(ModalScreen[dict]):
         self._confirm_label = confirm_label
         self._capture = capture
         self._probed_ssids = probed_ssids
+        self._exhaustion: dict[str, Exhaustion] = {}
         self._wordlists: list[str] = list(self._settings().wordlists)
 
     # CSS, not DEFAULT_CSS: the app's `Button { min-width: 12 }` outranks any DEFAULT_CSS rule.
     # No type prefix: each subclass loads this scoped to its own name.
     CSS = """
     #wordlist-clear, .wordlist-remove { min-width: 0; }
+    .exhausted { background: $error 30%; }
     """
 
     DEFAULT_CSS = """
@@ -167,10 +195,10 @@ class WordlistConfigModal(ModalScreen[dict]):
 
     async def on_mount(self) -> None:
         await self._show_wordlists()
-        self._show_password_source_counts()
+        self._show_counts_and_exhaustion()
 
-    @work(exclusive=True)
-    async def _show_password_source_counts(self) -> None:
+    @work
+    async def _show_counts_and_exhaustion(self) -> None:
         counts = await asyncio.to_thread(_count_password_sources, self._capture,
                                          self._probed_ssids)
         try:
@@ -184,6 +212,25 @@ class WordlistConfigModal(ModalScreen[dict]):
         self.query_one("#ap-ssid-passwords", Checkbox).label = f"This AP's SSID variants ({ap_ssid})"
         self.query_one("#probed-ssid-passwords", Checkbox).label = (
             f"Probed SSIDs ({counts.probed_ssid_passwords:,})")
+        if self._capture is not None:
+            self._exhaustion = await asyncio.to_thread(_read_exhaustion, self._capture)
+            self._mark_exhausted()
+
+    def _mark_exhausted(self) -> None:
+        if not self._exhaustion:
+            return
+        for row in self.query(".wordlist-row"):
+            self._mark(row, _file_identity(row.query_one(_RemoveButton).path))
+        for checkbox in self.query("#default-passwords"):
+            self._mark(checkbox, _file_identity(DEFAULT_PASSWORDS_PATH))
+        for checkbox in self.query("#ap-ssid-passwords"):
+            self._mark(checkbox, SSID_VARIANTS_IDENTITY)
+
+    def _mark(self, widget: Widget, identity: Optional[str]) -> None:
+        exhaustion = self._exhaustion.get(identity) if identity else None
+        if exhaustion is not None:
+            widget.add_class("exhausted")
+            widget.tooltip = _exhausted_tooltip(exhaustion)
 
     async def _show_wordlists(self) -> None:
         self.query_one("#wordlist-clear", Button).display = bool(self._wordlists)
@@ -199,6 +246,7 @@ class WordlistConfigModal(ModalScreen[dict]):
                              classes="wordlist-name"),
                        classes="wordlist-row")
             for number, path in enumerate(self._wordlists, 1))
+        self._mark_exhausted()
 
     @on(Button.Pressed, ".wordlist-remove")
     async def _remove_wordlist(self, event: Button.Pressed) -> None:
