@@ -257,6 +257,42 @@ def test_delete_capture_removes_file_and_cache_entry(tmp_path):
     assert v.persisted(ap.bssid) == []
 
 
+def test_delete_capture_removes_the_meta_with_the_last_capture(tmp_path):
+    v = Vault()
+    ap = AccessPoint(bssid="00:11:22:33:44:01", ssid="A")
+    v.save_wep_key(ap, b"abcde")
+    v.save_wep_key(ap, b"fghij")
+    meta = tmp_path / "A_00-11-22-33-44-01.meta"
+    v.delete_capture(v.persisted(ap.bssid)[0])
+    assert meta.exists()
+    v.delete_capture(v.persisted(ap.bssid)[0])
+    assert not meta.exists()
+
+
+def test_delete_capture_keeps_the_meta_of_another_ssid_on_the_bssid(tmp_path):
+    v = Vault()
+    v.save_wep_key(AccessPoint(bssid="00:11:22:33:44:01", ssid="A"), b"abcde")
+    v.save_wep_key(AccessPoint(bssid="00:11:22:33:44:01", ssid="B"), b"fghij")
+    v.delete_capture(next(c for c in v.persisted("00:11:22:33:44:01") if c.ssid == "A"))
+    assert not (tmp_path / "A_00-11-22-33-44-01.meta").exists()
+    assert (tmp_path / "B_00-11-22-33-44-01.meta").exists()
+
+
+def test_every_save_writes_the_meta(tmp_path):
+    v = Vault()
+    ap = _ap_with_hs(pmkid=b"" * 16)
+    v.save_handshake(ap, "11:22:33:44:55:66")
+    v.save_pmkid(ap, "11:22:33:44:55:66")
+    v.save_wps_pin(AccessPoint(bssid="00:11:22:33:44:02", ssid="Pin"), "12345670", "pw123456")
+    v.save_wps_pbc(AccessPoint(bssid="00:11:22:33:44:03", ssid="Pbc"), "pw123456")
+    v.save_wpa_psk("Psk", "00:11:22:33:44:04", "pw123456")
+    v.save_wep_key(AccessPoint(bssid="00:11:22:33:44:05", ssid="Wep"), b"abcde")
+    assert sorted(p.name for p in tmp_path.glob("*.meta")) == [
+        "HomeNet_aa-bb-cc-dd-ee-ff.meta", "Pbc_00-11-22-33-44-03.meta",
+        "Pin_00-11-22-33-44-02.meta", "Psk_00-11-22-33-44-04.meta",
+        "Wep_00-11-22-33-44-05.meta"]
+
+
 def test_delete_capture_drops_all_entries_sharing_a_path(tmp_path):
     # An aggregate .hc22000 backs both an HS and a PMKID entry: deleting drops both.
     agg = tmp_path / "Net_00-11-22-33-44-03.hc22000"
@@ -275,7 +311,8 @@ def test_zip_captures_bundles_beside_dir(tmp_path):
     out = v.zip_captures(v.all_captures())
     assert out is not None and out.parent == tmp_path.parent
     with zipfile.ZipFile(out) as zf:
-        assert len(zf.namelist()) == 1
+        names = zf.namelist()
+    assert len(names) == 2 and "A_00-11-22-33-44-01.meta" in names
 
 
 def test_zip_captures_none_when_empty(tmp_path):

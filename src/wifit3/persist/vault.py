@@ -17,6 +17,7 @@ from wifit3.persist import save
 from wifit3.persist.capture_history import load_capture_index, summarize
 from wifit3.persist.common import LEGACY_CAPTURE_RE, bssid_to_dashed, safe_ssid
 from wifit3.persist.config import Config
+from wifit3.persist.meta import meta_path, update_meta
 from wifit3.persist.save import SaveResult
 from wifit3.vault.manager import JobManager
 
@@ -203,6 +204,8 @@ class Vault:
     def save_handshake(self, ap: "AccessPoint", client_mac: str) -> Optional[SaveResult]:
         before = self._hc_lines(ap)
         result = save.save_handshake(ap, client_mac)
+        if result:
+            update_meta(ap.ssid, ap.bssid)
         if result and result.was_new:
             capture = PersistedCapture(
                 type=CaptureType.HS, timestamp=int(time.time()), path=str(result.path),
@@ -214,6 +217,8 @@ class Vault:
     def save_pmkid(self, ap: "AccessPoint", client_mac: str) -> Optional[SaveResult]:
         before = self._hc_lines(ap)
         result = save.save_pmkid(ap, client_mac)
+        if result:
+            update_meta(ap.ssid, ap.bssid)
         if result and result.was_new:
             capture = PersistedCapture(
                 type=CaptureType.PMKID, timestamp=int(time.time()), path=str(result.path),
@@ -239,6 +244,8 @@ class Vault:
 
     def save_wep_key(self, ap: "AccessPoint", key: bytes) -> Optional[SaveResult]:
         result = save.save_wep_key(ap, key)
+        if result:
+            update_meta(ap.ssid, ap.bssid)
         if result and result.was_new:
             self._insert_capture(PersistedCapture(
                 type=CaptureType.WEP, timestamp=int(time.time()), path=str(result.path),
@@ -247,6 +254,8 @@ class Vault:
 
     def save_wps_pin(self, ap: "AccessPoint", pin: str, psk: str) -> Optional[SaveResult]:
         result = save.save_wps_pin(ap, pin, psk)
+        if result:
+            update_meta(ap.ssid, ap.bssid)
         if result and result.was_new:
             self._insert_capture(PersistedCapture(
                 type=CaptureType.WPS_PIN, timestamp=int(time.time()), path=str(result.path),
@@ -255,6 +264,8 @@ class Vault:
 
     def save_wps_pbc(self, ap: "AccessPoint", psk: str) -> Optional[SaveResult]:
         result = save.save_wps_pbc(ap, psk)
+        if result:
+            update_meta(ap.ssid, ap.bssid)
         if result and result.was_new:
             self._insert_capture(PersistedCapture(
                 type=CaptureType.WPS_PBC, timestamp=int(time.time()), path=str(result.path),
@@ -263,6 +274,8 @@ class Vault:
 
     def save_wpa_psk(self, ssid: Optional[str], bssid: str, psk: str) -> Optional[SaveResult]:
         result = save.save_wpa_psk(ssid, bssid, psk)
+        if result:
+            update_meta(ssid, bssid)
         if result and result.was_new:
             self._insert_capture(PersistedCapture(
                 type=CaptureType.WPA_PSK, timestamp=int(time.time()), path=str(result.path),
@@ -285,6 +298,9 @@ class Vault:
                 self._index[bssid] = remaining
             else:
                 del self._index[bssid]
+        meta_name = safe_ssid(capture.ssid)
+        if not any(safe_ssid(c.ssid) == meta_name for c in self.persisted(capture.bssid)):
+            meta_path(capture.ssid, capture.bssid).unlink(missing_ok=True)
         if changed:
             self._notify_changed()
 
@@ -294,8 +310,7 @@ class Vault:
         timestamped archive beside captures/. None if none of the files exist."""
         paths: List[Path] = []
         seen: set[str] = set()
-        for c in captures:
-            p = Path(c.path)
+        for p in [Path(c.path) for c in captures] + [meta_path(c.ssid, c.bssid) for c in captures]:
             if p.is_file() and str(p) not in seen:
                 seen.add(str(p))
                 paths.append(p)
