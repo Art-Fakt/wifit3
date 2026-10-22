@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from wifit3.crack import wpa_psk
-from wifit3.crack.passwords import ssid_variants
+from wifit3.crack.passwords import ssid_passwords, ssid_variants
 from wifit3.dot11 import wpa
 from wifit3.models import PersistedCapture, ToolResult, ToolStatus
 from wifit3.models.access_point import CaptureType
@@ -19,6 +19,9 @@ _HASHCAT_PMKID_LINE = (
 _UNCRACKABLE_PMKID_LINE = (
     "WPA*01*00000000000000000000000000000000*fc690c158264*f4747f87f9f4"
     "*686173686361742d6573736964***")
+# ESSID "ab": too short for any numbered SSID variant, so it has only a few dozen.
+_UNCRACKABLE_SHORT_ESSID_LINE = (
+    "WPA*01*00000000000000000000000000000000*fc690c158264*f4747f87f9f4*6162***")
 _JOIN_SECONDS = 10.0
 
 
@@ -34,10 +37,10 @@ def _write(path: Path, lines: list[str]) -> str:
 
 def _launch(tool: CpuCrackTool, tmp_path: Path, hashlines: list[str],
             wordlists: list[list[str]], job_id: str = "job",
-            extra_passwords: list[str] | None = None) -> JobState:
+            extra_passwords: list[str] | None = None, ap_ssid_passwords: bool = False) -> JobState:
     capture_path = _write(tmp_path / f"{job_id}.hc22000", hashlines)
     paths = [_write(tmp_path / f"{job_id}_words{i}.txt", words) for i, words in enumerate(wordlists)]
-    config: dict = {"wordlists": paths}
+    config: dict = {"wordlists": paths, "ap_ssid_passwords": ap_ssid_passwords}
     if extra_passwords is not None:
         config["extra_passwords"] = extra_passwords
     job = JobState(job_id=job_id, tool_name="cpu_crack", capture_path=capture_path,
@@ -117,7 +120,7 @@ def test_cpu_crack_tries_ssid_variants_before_the_wordlist(tool, tmp_path, mocke
     line = f"WPA*01*{pmkid.hex()}*{mac_ap.hex()}*{mac_sta.hex()}*{ssid.encode().hex()}***"
     pmk_spy = mocker.patch("wifit3.dot11.wpa.derive_pmk", wraps=wpa.derive_pmk)
 
-    job = _launch(tool, tmp_path, [line], [["wrongpass1"]])
+    job = _launch(tool, tmp_path, [line], [["wrongpass1"]], ap_ssid_passwords=True)
     result = _poll_finished(tool, job)
 
     assert result.value == f"Cracked! Key: {psk}"
@@ -138,7 +141,7 @@ def test_cpu_crack_tries_probed_ssid_variants_before_the_wordlist(tool, tmp_path
 
     assert result.value == f"Cracked! Key: {psk}"
     tried = [call.args[0] for call in pmk_spy.call_args_list]
-    expected = ssid_variants("hashcat-essid") + ssid_variants(probed_ssid)
+    expected = ssid_passwords([probed_ssid])
     assert tried == expected[:expected.index(psk) + 1]
 
 
@@ -239,13 +242,14 @@ def _launch_with(tool: CpuCrackTool, tmp_path: Path, hashlines: list[str], **con
 
 
 def test_a_job_without_wordlist_files_cracks_from_the_ssid_passwords(tool, tmp_path):
-    job = _launch_with(tool, tmp_path, [_HASHCAT_PMKID_LINE], extra_passwords=["hashcat!"])
+    job = _launch_with(tool, tmp_path, [_HASHCAT_PMKID_LINE], extra_passwords=["hashcat!"],
+                       ap_ssid_passwords=False)
     result = _poll_finished(tool, job)
     assert result.status == ToolStatus.SUCCESS and result.key == "hashcat!"
 
 
 def test_a_job_without_wordlist_files_ends_not_found_on_the_ssid_passwords(tool, tmp_path):
-    job = _launch_with(tool, tmp_path, [_UNCRACKABLE_PMKID_LINE], ap_ssid_passwords=True)
+    job = _launch_with(tool, tmp_path, [_UNCRACKABLE_SHORT_ESSID_LINE], ap_ssid_passwords=True)
     result = _poll_finished(tool, job)
     assert result.status == ToolStatus.FAILURE and result.value == "SSID passwords"
 
@@ -253,10 +257,10 @@ def test_a_job_without_wordlist_files_ends_not_found_on_the_ssid_passwords(tool,
 @pytest.mark.parametrize("ticked", [True, False])
 def test_ap_ssid_passwords_box_adds_the_ap_ssid_variants(tool, tmp_path, ticked):
     wordlist = _write(tmp_path / "words.txt", ["unrelated"])
-    job = _launch_with(tool, tmp_path, [_UNCRACKABLE_PMKID_LINE], wordlists=[wordlist],
+    job = _launch_with(tool, tmp_path, [_UNCRACKABLE_SHORT_ESSID_LINE], wordlists=[wordlist],
                        ap_ssid_passwords=ticked)
     _join(tool, job)
-    variants = set(ssid_variants("hashcat-essid"))
+    variants = set(ssid_variants("ab"))
     assert bool(variants & set(tool._runs[job.job_id].ssid_passwords)) is ticked
 
 
