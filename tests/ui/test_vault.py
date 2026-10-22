@@ -40,7 +40,7 @@ async def test_delete_in_panel_confirms_and_removes(tmp_path):
         aps = view.query_one("#vault-table")._aps
         bssid, (ssid, caps) = next(iter(aps.items()))
         view.query_one("VaultItemView").load(bssid, ssid, caps)
-        await pilot.pause()
+        await pilot.pause(0)
 
         view.query_one(_CapturePanel).query_one(".delete", Button).press()
         await pilot.pause()
@@ -159,7 +159,7 @@ async def test_open_vault_focuses_ap_list_and_search_returns_to_it(tmp_path):
         await pilot.press("f")
         assert app.focused is search
         await pilot.press("h", "o", "m", "e")
-        await pilot.pause()
+        await pilot.pause(0)
         assert search.value == "home" and table.row_count == 1
         await pilot.press("escape")
         assert app.focused is table and app.screen is view
@@ -167,7 +167,7 @@ async def test_open_vault_focuses_ap_list_and_search_returns_to_it(tmp_path):
         await pilot.press("/")
         assert app.focused is search
         await pilot.press("backspace", "backspace", "backspace", "backspace", "enter")
-        await pilot.pause()
+        await pilot.pause(0)
         assert app.focused is table and table.row_count == 2
 
         await pilot.press("escape")
@@ -190,19 +190,19 @@ async def test_nickname_shows_in_the_row_and_title_and_n_edits_it(tmp_path):
         assert view.query_one("VaultItemView")._border_title.plain.startswith(" Upstairs (HomeNet)")
 
         await pilot.press("n")
-        await pilot.pause()
+        await pilot.pause(0)
         assert isinstance(app.screen, NicknameModal)
         assert app.screen.query_one("#nickname", Input).value == "Upstairs"
         app.screen.query_one("#nickname", Input).value = "[Den]"
         await pilot.press("enter")
-        await pilot.pause()
+        await pilot.pause(0)
         assert app.screen is view
         assert read_meta(meta_path("HomeNet", "aa:bb:cc:dd:ee:ff"))["nickname"] == "[Den]"
         assert table.get_row_at(0)[0].plain == "[Den] (HomeNet) ✓WEP"
 
         assert table.row_count == 2
         await pilot.press("f", "d", "e", "n")
-        await pilot.pause()
+        await pilot.pause(0)
         assert table.row_count == 1
 
 
@@ -219,7 +219,7 @@ async def test_add_credential_prefills_the_row_and_rejects_a_psk_the_handshake_r
         notify = mocker.patch.object(view, "notify")
 
         await pilot.press("a")
-        await pilot.pause()
+        await pilot.pause(0)
         modal = app.screen
         assert isinstance(modal, AddCredentialModal)
         assert modal.query_one("#ssid", Input).value == "HomeNet"
@@ -227,7 +227,7 @@ async def test_add_credential_prefills_the_row_and_rejects_a_psk_the_handshake_r
         modal.query_one("#value", Input).focus()
         modal.query_one("#value", Input).value = "wrongpass"
         await pilot.press("enter")
-        await pilot.pause()
+        await pilot.pause(0)
 
         assert app.screen is view
         verify.assert_called_once_with("aa:bb:cc:dd:ee:ff", "wrongpass")
@@ -298,9 +298,9 @@ async def test_selection_restored_after_reload(tmp_path):
         assert cursor_bssid() == "11:22:33:44:55:66"
 
         table.move_cursor(row=0)
-        await pilot.pause()
+        await pilot.pause(0)
         app.screen.query_one("#vault-table").reload_table()
-        await pilot.pause()
+        await pilot.pause(0)
         assert cursor_bssid() == "aa:bb:cc:dd:ee:ff"
 
 
@@ -318,12 +318,12 @@ async def test_delete_cancelled_keeps_file(tmp_path):
         aps = view.query_one("#vault-table")._aps
         bssid, (ssid, caps) = next(iter(aps.items()))
         view.query_one("VaultItemView").load(bssid, ssid, caps)
-        await pilot.pause()
+        await pilot.pause(0)
 
         view.query_one(_CapturePanel).query_one(".delete", Button).press()
         await pilot.pause()
         app.screen.query_one("#no", Button).press()
-        await pilot.pause()
+        await pilot.pause(0)
         assert target.exists()
         assert view.query_one("#vault-aps", DataTable).row_count == 1
 
@@ -341,7 +341,7 @@ async def test_a_hashline_capture_offers_each_cracker_by_its_label(tmp_path, wid
         await pilot.pause()
         bssid, (ssid, caps) = next(iter(view.query_one("#vault-table")._aps.items()))
         view.query_one("VaultItemView").load(bssid, ssid, caps)
-        await pilot.pause()
+        await pilot.pause(0)
 
         panel = view.query_one(_CapturePanel)
         buttons = list(panel.query(".tool-btn").results(Button))
@@ -349,5 +349,5 @@ async def test_a_hashline_capture_offers_each_cracker_by_its_label(tmp_path, wid
         assert [(str(b.label), b.region.right) for b in panel.query(Button).results(Button) if b.region.right > panel.content_region.right] == []
 
         buttons[1].press()
-        await pilot.pause()
+        await pilot.pause(0)
         assert isinstance(app.screen, CpuCrackConfigModal)

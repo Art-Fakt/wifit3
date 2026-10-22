@@ -127,7 +127,7 @@ async def test_escape_dismisses_without_saving():
         await pilot.pause(0)
         app.screen.query_one("#hashcat-args", Input).value = "-w 3"
         await pilot.press("escape")
-        await pilot.pause()
+        await pilot.pause(0)
 
         assert not isinstance(app.screen, HashcatConfigModal)
 
@@ -208,9 +208,9 @@ async def test_launch_saves_what_is_left_after_a_removal(tmp_path):
         modal = app.screen
         modal.query_one("#hashcat-exe", Input).value = str(tmp_path / "hashcat")
         modal.query(_RemoveButton).first().press()
-        await pilot.pause()
+        await pilot.pause(0)
         modal.query_one("#wordlist-launch", Button).press()
-        await pilot.pause()
+        await pilot.pause(0)
 
     assert dismissed[0]["wordlists"] == [str(tmp_path / "b.txt")]
     assert Config.hashcat.wordlists == [str(tmp_path / "b.txt")]
@@ -251,7 +251,7 @@ async def test_cpu_crack_launches_with_only_the_wordlists_and_remembers_them():
         assert not app.screen.query("#hashcat-exe")
         await app.screen._wordlists_chosen([Path(r"D:\a.txt"), Path(r"D:\b.txt")])
         app.screen.query_one("#wordlist-launch", Button).press()
-        await pilot.pause()
+        await pilot.pause(0)
 
     assert dismissed == [{"wordlists": [r"D:\a.txt", r"D:\b.txt"], "default_passwords": True,
                           "ap_ssid_passwords": True, "probed_ssid_passwords": True}]
