@@ -9,7 +9,9 @@ from textual.binding import Binding
 
 from .vault_table import VaultTable
 from .vault_item import VaultItemView
+from wifit3.persist.meta import meta_path, read_meta, update_meta
 from wifit3.ui.vault.job_pane import JobTrackerPane
+from wifit3.ui.vault.modals.nickname import NicknameModal
 
 class VaultDrawer(ModalScreen):
     """The Vault drawer overlay."""
@@ -21,6 +23,7 @@ class VaultDrawer(ModalScreen):
         Binding("escape", "dismiss_drawer", "Close", show=True),
         Binding("f", "focus_search", "Search", show=True),
         Binding("/", "focus_search", "Search", show=False),
+        Binding("n", "set_nickname", "Nickname", show=True),
         Binding("z", "export_zip", "Export Zip", show=True),
         Binding("o", "show_directory", "Show Dir", show=True),
         Binding("q", "app.quit", "Quit", show=True),
@@ -96,7 +99,7 @@ class VaultDrawer(ModalScreen):
         table = self.query_one("#vault-table", VaultTable)
         entry = table._aps.get(bssid)
         if entry is not None:
-            widget.load(bssid, entry[0], entry[1])
+            widget.load(bssid, table.display_name(bssid, entry[0]), entry[1])
         else:
             widget.load("", None, [])
 
@@ -121,6 +124,39 @@ class VaultDrawer(ModalScreen):
     def _ap_highlighted(self, event: DataTable.RowHighlighted) -> None:
         if event.row_key is not None and event.row_key.value is not None:
             self._load_widget(event.row_key.value)
+
+    def _selected_network(self) -> tuple[Optional[str], str]:
+        """(SSID, BSSID) of the row under the cursor; BSSID is "" when there is none."""
+        aps = self.query_one("#vault-aps", DataTable)
+        if aps.row_count == 0:
+            return None, ""
+        bssid = aps.coordinate_to_cell_key(aps.cursor_coordinate).row_key.value or ""
+        entry = self.query_one("#vault-table", VaultTable)._aps.get(bssid)
+        return (entry[0] if entry else None), bssid
+
+    def action_set_nickname(self) -> None:
+        ssid, bssid = self._selected_network()
+        if not bssid:
+            self.notify("Select an AP first", severity="warning")
+            return
+        meta = read_meta(meta_path(ssid, bssid))
+        nickname = meta.get("nickname")
+        current = nickname if isinstance(nickname, str) else ""
+        meta_ssid = meta.get("ssid")
+        real_ssid = meta_ssid if isinstance(meta_ssid, str) else ssid   # row SSIDs are filename-safe
+
+        def _save(value: Optional[str]) -> None:
+            if value is None:
+                return
+            try:
+                update_meta(real_ssid, bssid, nickname=value or None)
+            except OSError as exc:
+                self.notify(f"Could not save nickname: {exc}", severity="error")
+                return
+            self.query_one("#vault-table", VaultTable).reload_nicknames()
+            self.notify("Nickname saved" if value else "Nickname cleared")
+
+        self.app.push_screen(NicknameModal(real_ssid, current), _save)
 
     def action_export_zip(self) -> None:
         try:

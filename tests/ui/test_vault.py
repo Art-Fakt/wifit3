@@ -6,10 +6,12 @@ from textual.widgets import Button, DataTable, Input
 
 from wifit3.models import AccessPoint
 from wifit3.models.jobs import JobState, ToolStatus
+from wifit3.persist.meta import meta_path, read_meta, update_meta
 from wifit3.persist.save import SaveResult
 from wifit3.ui.app import WifiteApp
 from wifit3.ui.screens.vault_drawer import VaultDrawer
 from wifit3.ui.screens.vault_item import ConfirmModal, _CapturePanel
+from wifit3.ui.vault.modals.nickname import NicknameModal
 
 _HS_LINE = "WPA*02*" + "0" * 32 + "*aabbccddeeff*112233445566*5465737431***2\n"
 _PMKID_LINE = "WPA*01*" + "0" * 32 + "*aabbccddeeff*112233445566*5465737431***\n"
@@ -170,6 +172,37 @@ async def test_open_vault_focuses_ap_list_and_search_returns_to_it(tmp_path):
         await pilot.press("escape")
         await pilot.pause(0.4)
         assert app.screen is not view
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_usb_devices")
+async def test_nickname_shows_in_the_row_and_title_and_n_edits_it(tmp_path):
+    _write(tmp_path, "HomeNet_aa-bb-cc-dd-ee-ff_1000_wep_key.txt", _WEP_TXT)
+    _write(tmp_path, "Other_11-22-33-44-55-66_1000_wep_key.txt", _WEP_TXT)
+    update_meta("HomeNet", "aa:bb:cc:dd:ee:ff", nickname="Upstairs")
+    app = WifiteApp()
+    async with app.run_test() as pilot:
+        view = await _open_vault(app)
+        await pilot.pause()
+        table = view.query_one("#vault-aps", DataTable)
+        assert table.get_row_at(0)[0].plain == "Upstairs (HomeNet) ✓WEP"
+        assert view.query_one("VaultItemView")._border_title.plain.startswith(" Upstairs (HomeNet)")
+
+        await pilot.press("n")
+        await pilot.pause()
+        assert isinstance(app.screen, NicknameModal)
+        assert app.screen.query_one("#nickname", Input).value == "Upstairs"
+        app.screen.query_one("#nickname", Input).value = "[Den]"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.screen is view
+        assert read_meta(meta_path("HomeNet", "aa:bb:cc:dd:ee:ff"))["nickname"] == "[Den]"
+        assert table.get_row_at(0)[0].plain == "[Den] (HomeNet) ✓WEP"
+
+        assert table.row_count == 2
+        await pilot.press("f", "d", "e", "n")
+        await pilot.pause()
+        assert table.row_count == 1
 
 
 @pytest.mark.asyncio
