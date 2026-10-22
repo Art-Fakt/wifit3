@@ -6,12 +6,13 @@ from typing import Any, Dict, Iterator, Optional
 
 from wifit3.crack import wpa_psk
 from wifit3.crack.hc22000_format import Hc22000Line, parse_hc22000
-from wifit3.crack.passwords import DEFAULT_PASSWORDS_PATH, read_passwords, ssid_passwords, ssid_variants
+from wifit3.crack.passwords import DEFAULT_PASSWORDS_PATH, read_passwords, ssid_passwords
 from wifit3.dot11 import wpa
 from wifit3.models import PersistedCapture, ToolCapability, ToolResult, ToolStatus
 from wifit3.models.jobs import JobAction, JobState, ToolName
 from wifit3.persist.config import Config
-from wifit3.vault.tools.cracker import CrackerTool, WordlistQueue, expand_wordlists
+from wifit3.vault.tools.cracker import (CrackerTool, WordlistQueue, capture_ssid_variants,
+                                        expand_wordlists)
 
 
 logger = logging.getLogger(__name__)
@@ -78,11 +79,12 @@ class CpuCrackTool(CrackerTool[WordlistQueue]):
         lines_by_essid = _lines_by_essid(job.capture_path)
         if not lines_by_essid:
             raise ValueError(f"No hashlines in {job.capture_path}")
-        essid_passwords = [psk for essid in lines_by_essid
-                           for psk in ssid_variants(essid.decode("utf-8", errors="replace"))
-                           ] if job.config.get("ap_ssid_passwords", True) else []
-        first_passwords = [] if queue.index else list(dict.fromkeys(
-            essid_passwords + ssid_passwords(job.config.get("extra_passwords", []))))
+        first_passwords: list[str] = []
+        if not queue.index:
+            essid_passwords = (capture_ssid_variants(job.capture_path)
+                               if job.config.get("ap_ssid_passwords", True) else [])
+            first_passwords = list(dict.fromkeys(
+                essid_passwords + ssid_passwords(job.config.get("extra_passwords", []))))
         if not first_passwords and queue.current is None:
             raise ValueError("No passwords to try: choose a wordlist or a password source")
         run = _WordlistRun(wordlist=Path(queue.current) if queue.current else None,
@@ -180,7 +182,3 @@ class CpuCrackTool(CrackerTool[WordlistQueue]):
         if queue.stopped or queue.skipping_wordlist:
             return JobAction.STOP
         return self._queue_actions(queue) | self._pause_action(progress_msg)
-
-    @staticmethod
-    def _exhausted_msg(queue: WordlistQueue) -> str:
-        return CrackerTool._exhausted_msg(queue) if queue.wordlists else "SSID passwords"

@@ -3,6 +3,8 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Generic, Optional, Self, TypeVar
 
+from wifit3.crack.hc22000_format import parse_hc22000
+from wifit3.crack.passwords import ssid_variants
 from wifit3.models import PersistedCapture, ToolResult, ToolStatus
 from wifit3.models.jobs import JobAction, JobState
 from wifit3.vault.tools.base import VaultTool
@@ -19,6 +21,14 @@ def expand_wordlists(wordlist_paths: list[str]) -> list[str]:
         elif path.is_file():
             expanded.append(str(path.resolve()))
     return expanded
+
+
+def capture_ssid_variants(capture_path: str) -> list[str]:
+    """``ssid_variants`` of every ESSID in the capture's hashlines, deduped."""
+    text = Path(capture_path).read_text(encoding="utf-8", errors="replace")
+    essids = dict.fromkeys(bytes.fromhex(line.essid).decode("utf-8", errors="replace")
+                           for line in map(parse_hc22000, text.splitlines()) if line is not None)
+    return list(dict.fromkeys(psk for essid in essids for psk in ssid_variants(essid)))
 
 
 @dataclass
@@ -45,10 +55,18 @@ class WordlistQueue:
         return self.index + 1 < len(self.wordlists)
 
     @property
+    def chosen_wordlists(self) -> list[str]:
+        """The wordlists the job was given, without any file wifit3 wrote for it."""
+        return self.wordlists
+
+    def wordlist_name(self, path: str) -> str:
+        return Path(path).name
+
+    @property
     def label(self) -> str:
         """Current file (``rockyou.txt``), with its position when there are several:
         ``rockyou.txt (3/16)``."""
-        name = Path(self.current).name if self.current else ""
+        name = self.wordlist_name(self.current) if self.current else ""
         return f"{name} ({self.index + 1}/{len(self.wordlists)})" if len(self.wordlists) > 1 else name
 
 
@@ -164,6 +182,9 @@ class CrackerTool(VaultTool, Generic[QueueT]):
     @staticmethod
     def _exhausted_msg(queue: WordlistQueue) -> str:
         """What the NOT FOUND badge reports: the one wordlist by name, or how many were tried."""
-        if len(queue.wordlists) == 1:
-            return Path(queue.wordlists[0]).name
-        return f"{len(queue.wordlists)} wordlists"
+        wordlists = queue.chosen_wordlists
+        if not wordlists:
+            return "SSID passwords"
+        if len(wordlists) == 1:
+            return Path(wordlists[0]).name
+        return f"{len(wordlists)} wordlists"

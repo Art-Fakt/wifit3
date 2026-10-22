@@ -484,7 +484,9 @@ def test_save_submits_to_the_chosen_tool_with_its_saved_settings(tmp_path, mocke
     capture = v.persisted(_ap_with_hs().bssid)[0]
     assert v.manager.submit_job.call_args == (
         ("hashcat", capture, {"hashcat_exe": "/usr/bin/hashcat", "wordlists": ["/lists/a.txt"],
-                              "hashcat_args": "-w 3"}),
+                              "hashcat_args": "-w 3", "default_passwords": True,
+                              "ap_ssid_passwords": True, "probed_ssid_passwords": True,
+                              "extra_passwords": []}),
         {"auto_crack": True})
 
 

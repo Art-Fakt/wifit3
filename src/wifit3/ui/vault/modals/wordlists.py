@@ -1,16 +1,53 @@
+import asyncio
+from collections.abc import Sequence
+from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
 from typing import Any, ClassVar, Optional
 
 from rich.markup import escape
-from textual import on
+from textual import on, work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.css.query import NoMatches
 from textual.screen import ModalScreen
-from textual.widgets import Button, Label
+from textual.widgets import Button, Checkbox, Label
 
+from wifit3.crack.passwords import (DEFAULT_PASSWORDS_PATH, read_passwords, ssid_passwords,
+                                    ssid_variants)
+from wifit3.models import PersistedCapture
 from wifit3.persist.config import Config, ConfigError, CpuCrackSettings, HashcatSettings
 from wifit3.ui.path_picker import BROWSE_GLYPH, PathPickerModal
+from wifit3.vault.tools.cracker import capture_ssid_variants
+
+_EXAMPLE_SSID = "HomeWifi"
+
+
+@cache
+def _ssid_variants_per_ssid() -> int:
+    return len(ssid_variants(_EXAMPLE_SSID))
+
+
+@dataclass
+class _PasswordSourceCounts:
+    default_passwords: int
+    ap_ssid_passwords: Optional[int]        # None without a capture: shown per SSID
+    probed_ssid_passwords: int
+
+
+def _count_password_sources(capture: Optional[PersistedCapture],
+                            probed_ssids: Sequence[str]) -> _PasswordSourceCounts:
+    ap_ssid_passwords = None
+    if capture is not None:
+        try:
+            ap_ssid_passwords = len(capture_ssid_variants(capture.path))
+        except OSError:
+            ap_ssid_passwords = 0
+    return _PasswordSourceCounts(
+        default_passwords=sum(1 for _ in read_passwords(DEFAULT_PASSWORDS_PATH)),
+        ap_ssid_passwords=ap_ssid_passwords,
+        probed_ssid_passwords=len(ssid_passwords(probed_ssids)))
 
 
 class _RemoveButton(Button):
@@ -29,10 +66,14 @@ class WordlistConfigModal(ModalScreen[dict]):
 
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
 
-    def __init__(self, confirm_label: str = "Launch") -> None:
-        """``confirm_label`` "Save" configures the tool without the caller launching a job."""
+    def __init__(self, confirm_label: str = "Launch", capture: Optional[PersistedCapture] = None,
+                 probed_ssids: Sequence[str] = ()) -> None:
+        """``confirm_label`` "Save" configures the tool without the caller launching a job;
+        ``capture`` is the one a launch cracks, for its SSID variant count."""
         super().__init__()
         self._confirm_label = confirm_label
+        self._capture = capture
+        self._probed_ssids = probed_ssids
         self._wordlists: list[str] = list(self._settings().wordlists)
 
     # CSS, not DEFAULT_CSS: the app's `Button { min-width: 12 }` outranks any DEFAULT_CSS rule.
@@ -84,6 +125,9 @@ class WordlistConfigModal(ModalScreen[dict]):
         text-wrap: nowrap;
         text-overflow: ellipsis;
     }
+    #default-passwords {
+        margin-top: 1;
+    }
     #wordlist-buttons {
         margin-top: 2;
         align: right middle;
@@ -108,8 +152,38 @@ class WordlistConfigModal(ModalScreen[dict]):
             yield Button("Clear", variant="error", id="wordlist-clear")
         yield VerticalScroll(id="wordlists")
 
+    def _compose_password_sources(self) -> ComposeResult:
+        settings = self._settings()
+        yield Checkbox("Default passwords", value=settings.default_passwords,
+                       id="default-passwords")
+        yield Checkbox("This AP's SSID variants", value=settings.ap_ssid_passwords,
+                       tooltip="Passwords based on the AP's SSID: cases, leetspeak, separators, "
+                               "common suffixes and numbers 0-9999",
+                       id="ap-ssid-passwords")
+        yield Checkbox("Probed SSIDs", value=settings.probed_ssid_passwords,
+                       tooltip="Passwords based on SSIDs probed this session (clients may "
+                               "mistype the PSK into the SSID field)",
+                       id="probed-ssid-passwords")
+
     async def on_mount(self) -> None:
         await self._show_wordlists()
+        self._show_password_source_counts()
+
+    @work(exclusive=True)
+    async def _show_password_source_counts(self) -> None:
+        counts = await asyncio.to_thread(_count_password_sources, self._capture,
+                                         self._probed_ssids)
+        try:
+            default = self.query_one("#default-passwords", Checkbox)
+        except NoMatches:   # dismissed while counting
+            return
+        default.label = f"Default passwords ({counts.default_passwords:,})"
+        default.tooltip = f"RockYou's top {counts.default_passwords:,} passwords by frequency"
+        ap_ssid = (f"{counts.ap_ssid_passwords:,}" if counts.ap_ssid_passwords is not None
+                   else f"about {_ssid_variants_per_ssid():,} per SSID")
+        self.query_one("#ap-ssid-passwords", Checkbox).label = f"This AP's SSID variants ({ap_ssid})"
+        self.query_one("#probed-ssid-passwords", Checkbox).label = (
+            f"Probed SSIDs ({counts.probed_ssid_passwords:,})")
 
     async def _show_wordlists(self) -> None:
         self.query_one("#wordlist-clear", Button).display = bool(self._wordlists)
@@ -173,10 +247,17 @@ class WordlistConfigModal(ModalScreen[dict]):
         self.dismiss(config)
 
     def _launch_config(self) -> Optional[dict[str, Any]]:
-        if not self._wordlists:
-            self.notify("Please choose at least one wordlist", severity="error")
+        config = {"wordlists": list(self._wordlists),
+                  "default_passwords": self._checked("#default-passwords"),
+                  "ap_ssid_passwords": self._checked("#ap-ssid-passwords"),
+                  "probed_ssid_passwords": self._checked("#probed-ssid-passwords")}
+        if not any(config.values()):
+            self.notify("Please choose a wordlist or a password source", severity="error")
             return None
-        return {"wordlists": list(self._wordlists)}
+        return config
+
+    def _checked(self, selector: str) -> bool:
+        return self.query_one(selector, Checkbox).value
 
     def _remember(self, config: dict[str, Any]) -> None:
         """Persist the launch settings so the next job starts pre-filled."""
@@ -191,4 +272,8 @@ class WordlistConfigModal(ModalScreen[dict]):
         raise NotImplementedError
 
     def _store_settings(self, config: dict[str, Any]) -> None:
-        self._settings().wordlists = list(config["wordlists"])
+        settings = self._settings()
+        settings.wordlists = list(config["wordlists"])
+        settings.default_passwords = config["default_passwords"]
+        settings.ap_ssid_passwords = config["ap_ssid_passwords"]
+        settings.probed_ssid_passwords = config["probed_ssid_passwords"]

@@ -5,7 +5,9 @@ from textual.app import App
 from textual.widgets import Button, Checkbox, Input, Label
 
 import wifit3.ui.vault.modals.hashcat as mod
-from wifit3.persist.config import Config, ConfigError
+from wifit3.crack.passwords import DEFAULT_PASSWORDS_PATH, read_passwords, ssid_passwords, ssid_variants
+from wifit3.models import CaptureType, PersistedCapture
+from wifit3.persist.config import Config, ConfigError, HashcatSettings
 from wifit3.ui.vault.modals.cpu_crack import CpuCrackConfigModal
 from wifit3.ui.vault.modals.hashcat import HashcatConfigModal, _default_hashcat_path
 from wifit3.ui.vault.modals.wordlists import _RemoveButton
@@ -50,13 +52,14 @@ def test_launching_remembers_the_launch_settings():
     """Straight through the real Config.save(): tests/ui/conftest.py points it at a tmp file."""
     HashcatConfigModal()._remember({"hashcat_exe": r"D:\hashcat.exe",
                                     "wordlists": [r"D:\rockyou.txt", r"D:\top29m.txt"],
-                                    "hashcat_args": "-w 3"})
-    Config.hashcat.path = Config.hashcat.args = None
-    Config.hashcat.wordlists = []
+                                    "hashcat_args": "-w 3", "default_passwords": False,
+                                    "ap_ssid_passwords": True, "probed_ssid_passwords": False})
+    Config.hashcat = HashcatSettings()
     Config.load()
 
-    assert (Config.hashcat.path, Config.hashcat.wordlists, Config.hashcat.args) == (
-        r"D:\hashcat.exe", [r"D:\rockyou.txt", r"D:\top29m.txt"], "-w 3")
+    assert Config.hashcat == HashcatSettings(
+        path=r"D:\hashcat.exe", args="-w 3", wordlists=[r"D:\rockyou.txt", r"D:\top29m.txt"],
+        default_passwords=False, ap_ssid_passwords=True, probed_ssid_passwords=False)
 
 
 def test_an_unwritable_config_warns_but_keeps_the_paths(monkeypatch):
@@ -69,7 +72,8 @@ def test_an_unwritable_config_warns_but_keeps_the_paths(monkeypatch):
     warnings = []
     monkeypatch.setattr(modal, "notify", lambda *a, **k: warnings.append((a, k)))
     modal._remember({"hashcat_exe": r"D:\hashcat.exe", "wordlists": [r"D:\rockyou.txt"],
-                     "hashcat_args": ""})
+                     "hashcat_args": "", "default_passwords": True, "ap_ssid_passwords": True,
+                     "probed_ssid_passwords": True})
 
     assert Config.hashcat.path == r"D:\hashcat.exe"
     assert warnings and warnings[0][1].get("title") == "Config Error"
@@ -107,7 +111,8 @@ async def test_saved_args_prefill_the_modal_and_come_back_on_launch():
         await pilot.pause(0)
 
     assert dismissed == [{"hashcat_exe": r"D:\hashcat.exe", "wordlists": [r"D:\rockyou.txt"],
-                          "hashcat_args": "-w 3 --self-test-disable"}]
+                          "default_passwords": True, "ap_ssid_passwords": True,
+                          "probed_ssid_passwords": True, "hashcat_args": "-w 3 --self-test-disable"}]
 
 
 async def test_escape_dismisses_without_saving():
@@ -142,7 +147,10 @@ async def test_the_modal_reads_back_the_wordlists_it_was_given():
         assert app.screen._wordlists == [r"D:\a.txt", r"D:\b.txt"]
 
 
-async def test_launch_is_refused_without_a_wordlist():
+async def test_launch_is_refused_without_a_wordlist_or_password_source():
+    Config.hashcat.default_passwords = False
+    Config.hashcat.ap_ssid_passwords = False
+    Config.hashcat.probed_ssid_passwords = False
     app = _Host()
     async with app.run_test() as pilot:
         dismissed = []
@@ -279,3 +287,27 @@ async def test_remove_and_clear_shrink_below_the_global_button_width_in_both_mod
             await pilot.pause()
             assert app.screen.query_one(_RemoveButton).size.width == 3
             assert app.screen.query_one("#wordlist-clear", Button).size.width == 7
+
+
+async def test_password_source_labels_count_the_capture_or_one_ssid_and_the_probed(tmp_path):
+    capture = tmp_path / "ab_02-00-00-00-00-01.hc22000"
+    capture.write_text(f"WPA*01*{'00' * 16}*020000000001*020000000002*6162***\n"
+                       f"WPA*01*{'00' * 16}*020000000001*020000000003*6162***\n", encoding="utf-8")
+    persisted = PersistedCapture(type=CaptureType.PMKID, timestamp=0, path=str(capture),
+                                 bssid="02:00:00:00:00:01")
+    default_count = sum(1 for _ in read_passwords(DEFAULT_PASSWORDS_PATH))
+    app = _Host()
+    async with app.run_test() as pilot:
+        for modal, ssid_label in (
+                (CpuCrackConfigModal(capture=persisted, probed_ssids=["CafeGuest"]),
+                 f"This AP's SSID variants ({len(ssid_variants('ab'))})"),
+                (HashcatConfigModal(confirm_label="Save", probed_ssids=["CafeGuest"]),
+                 f"This AP's SSID variants (about {len(ssid_variants('HomeWifi')):,} per SSID)")):
+            app.push_screen(modal)
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            labels = [str(checkbox.label) for checkbox in modal.query(Checkbox)
+                      if checkbox.id != "hashcat-self-test-disable"]
+            assert labels == [f"Default passwords ({default_count:,})", ssid_label,
+                              f"Probed SSIDs ({len(ssid_passwords(['CafeGuest']))})"]
+            app.pop_screen()

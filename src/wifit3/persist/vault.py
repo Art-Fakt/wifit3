@@ -128,14 +128,18 @@ class Vault:
         self._change_listeners.append(listener)
 
     def set_probed_ssids_source(self, source: Callable[[], Iterable[str]]) -> None:
-        """Where CPU Crack jobs read this session's probed SSIDs, tried before the wordlist."""
+        """Where cracking jobs read this session's probed SSIDs, tried before the wordlists."""
         self._probed_ssids_source = source
 
     def add_probed_ssids(self, config: dict) -> dict:
         """``config`` plus this session's probed SSIDs as ``extra_passwords``, when it asks for them."""
         if not config.get("probed_ssid_passwords"):
             return config
-        return {**config, "extra_passwords": sorted(self._probed_ssids_source())}
+        return {**config, "extra_passwords": self.probed_ssids()}
+
+    def probed_ssids(self) -> list[str]:
+        """This session's probed SSIDs, sorted."""
+        return sorted(self._probed_ssids_source())
 
     def _notify_changed(self) -> None:
         self.revision += 1
