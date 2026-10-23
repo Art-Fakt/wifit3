@@ -1,11 +1,7 @@
 from textual.app import ComposeResult
-from textual.widgets import Label
 
 from wifit3.persist.config import Config, CpuCrackSettings
 from wifit3.ui.vault.modals.wordlists import WordlistConfigModal
-
-_ABOUT = ("[b]Note:[/b] CPU Crack is wifit3's built-in WPA cracker.\n"
-          "      May cause battery drain. Use at your own risk.")
 
 
 class CpuCrackConfigModal(WordlistConfigModal):
@@ -13,14 +9,9 @@ class CpuCrackConfigModal(WordlistConfigModal):
 
     dialog_title = "CPU Crack"
 
-    DEFAULT_CSS = """
-    CpuCrackConfigModal #cpu-crack-about { margin: 1 0; }
-    """
-
     def _settings(self) -> CpuCrackSettings:
         return Config.cpu_crack
 
     def _compose_fields(self) -> ComposeResult:
-        yield Label(_ABOUT, id="cpu-crack-about")
         yield from self._compose_wordlists()
         yield from self._compose_password_sources()

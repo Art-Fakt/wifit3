@@ -13,8 +13,8 @@ from wifit3.persist.config import Config, ConfigError, HashcatSettings
 from wifit3.persist.meta import update_meta
 from wifit3.ui.vault.modals.cpu_crack import CpuCrackConfigModal
 from wifit3.ui.vault.modals.hashcat import HashcatConfigModal, _default_hashcat_path
-from wifit3.ui.vault.modals.wordlists import _RemoveButton
-from wifit3.vault.exhaustion import hashline_id, wordlist_identity
+from wifit3.ui.vault.modals.wordlists import _RemoveButton, _UseCheckbox, _exhausted_tooltip
+from wifit3.vault.exhaustion import Exhaustion, hashline_id, wordlist_identity
 
 
 @pytest.fixture(autouse=True)
@@ -55,6 +55,7 @@ def test_saved_path_outranks_a_hashcat_found_on_path(monkeypatch):
 def test_launching_remembers_the_launch_settings():
     """Straight through the real Config.save(): tests/ui/conftest.py points it at a tmp file."""
     modal = HashcatConfigModal(probed_ssids=["CafeGuest"])
+    modal._wordlists = [r"D:\rockyou.txt", r"D:\top29m.txt"]
     modal._remember({"hashcat_exe": r"D:\hashcat.exe",
                      "wordlists": [r"D:\rockyou.txt", r"D:\top29m.txt"],
                      "hashcat_args": "-w 3", "default_passwords": False,
@@ -142,10 +143,9 @@ async def test_the_modal_reads_back_the_wordlists_it_was_given():
     async with app.run_test() as pilot:
         app.push_screen(HashcatConfigModal())
         await pilot.pause(0)
-        shown = [str(label.content) for label in app.screen.query(".wordlist-name")]
+        shown = [str(box.label) for box in app.screen.query(_UseCheckbox)]
         assert len(shown) == 2
-        assert "1:" in shown[0] and "a.txt" in shown[0]
-        assert "2:" in shown[1] and "b.txt" in shown[1]
+        assert "a.txt" in shown[0] and "b.txt" in shown[1]
 
         await app.screen._wordlists_chosen(None)        # a cancelled picker keeps the selection
         await pilot.pause(0)
@@ -185,9 +185,9 @@ async def test_x_removes_one_wordlist_and_clear_removes_them_all(tmp_path):
 
         next(b for b in modal.query(_RemoveButton) if b.path.endswith("b.txt")).press()
         await pilot.pause()
-        names = [str(label.content) for label in rows.query(".wordlist-name")]
+        names = [str(box.label) for box in rows.query(_UseCheckbox)]
         assert len(names) == 2
-        assert names[0].startswith("[bold]1:[/bold] a.txt") and names[1].startswith("[bold]2:[/bold] c.txt")
+        assert names[0].startswith("a.txt") and names[1].startswith("c.txt")
         assert str(tmp_path) in names[0], "the parent directory tells same-named files apart"
 
         clear.press()
@@ -364,3 +364,51 @@ async def test_exhausted_wordlists_and_sources_are_marked_with_when_and_on_how_m
         assert not modal.query_one("#ap-ssid-passwords", Checkbox).has_class("exhausted")
         assert exhausted_row.tooltip == f"Exhausted {date} (3 days ago) on 1/2 hashlines"
         assert default.tooltip == f"Exhausted {date} (3 days ago) on 2/2 hashlines"
+
+
+async def test_exhausted_rows_start_unchecked_and_one_click_restores_them(tmp_path):
+    line = f"WPA*01*{'00' * 16}*020000000001*020000000002*6162***"
+    capture = tmp_path / "ab_02-00-00-00-00-01.hc22000"
+    capture.write_text(f"{line}\n", encoding="utf-8")
+    persisted = PersistedCapture(type=CaptureType.PMKID, timestamp=0, path=str(capture),
+                                 bssid="02:00:00:00:00:01", ssid="ab")
+    exhausted_list, fresh_list = tmp_path / "exhausted.txt", tmp_path / "fresh.txt"
+    exhausted_list.write_text("password1\n", encoding="utf-8")
+    fresh_list.write_text("password2\n", encoding="utf-8")
+    Config.cpu_crack.wordlists = [str(exhausted_list), str(fresh_list)]
+    update_meta("ab", "02:00:00:00:00:01", exhausted={
+        wordlist_identity(exhausted_list): {hashline_id(line): int(time.time())}})
+    app = _Host()
+    async with app.run_test() as pilot:
+        modal = CpuCrackConfigModal(capture=persisted)
+        app.push_screen(modal)
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        exhausted_box, fresh_box = modal.query(_UseCheckbox)
+        assert (exhausted_box.value, fresh_box.value) == (False, True)
+        assert modal._launch_config()["wordlists"] == [str(fresh_list)]
+        exhausted_box.value = True
+        await pilot.pause()
+        await modal._show_wordlists()
+        assert modal.query(_UseCheckbox).first().value is True
+        assert modal._launch_config()["wordlists"] == [str(exhausted_list), str(fresh_list)]
+
+
+async def test_deselecting_a_wordlist_skips_it_in_the_launch_but_keeps_it_saved():
+    Config.cpu_crack.wordlists = [r"D:\a.txt", r"D:\b.txt"]
+    app = _Host()
+    async with app.run_test() as pilot:
+        modal = CpuCrackConfigModal()
+        app.push_screen(modal)
+        await pilot.pause()
+        modal.query(_UseCheckbox).first().value = False
+        await pilot.pause()
+        config = modal._launch_config()
+        modal._remember(config)
+    assert config["wordlists"] == [r"D:\b.txt"]
+    assert Config.cpu_crack.wordlists == [r"D:\a.txt", r"D:\b.txt"]
+
+
+def test_exhausted_today_is_not_zero_days_ago():
+    tooltip = _exhausted_tooltip(Exhaustion(1, 2, int(time.time()) - 60))
+    assert "(today)" in tooltip and "days ago" not in tooltip

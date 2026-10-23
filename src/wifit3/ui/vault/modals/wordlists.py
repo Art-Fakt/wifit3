@@ -69,7 +69,8 @@ def _file_identity(path: str | Path) -> Optional[str]:
 def _exhausted_tooltip(exhaustion: Exhaustion) -> str:
     date = datetime.fromtimestamp(exhaustion.latest).strftime("%Y-%m-%d")
     days = int(time.time() - exhaustion.latest) // 86400
-    return (f"Exhausted {date} ({days} days ago) on "
+    ago = f"{days} days ago" if days else "today"
+    return (f"Exhausted {date} ({ago}) on "
             f"{exhaustion.exhausted_hashlines}/{exhaustion.hashlines} hashlines")
 
 
@@ -78,6 +79,15 @@ class _RemoveButton(Button):
 
     def __init__(self, path: str) -> None:
         super().__init__("X", variant="error", compact=True, classes="wordlist-remove")
+        self.path = path
+
+
+class _UseCheckbox(Checkbox):
+    """The checkbox beside one chosen wordlist; ``path`` is the wordlist it includes in a launch."""
+
+    def __init__(self, path: str, value: bool) -> None:
+        super().__init__(f"{escape(Path(path).name)}  [dim]{escape(str(Path(path).parent))}[/dim]",
+                         value=value, compact=True, classes="wordlist-use")
         self.path = path
 
 
@@ -99,12 +109,15 @@ class WordlistConfigModal(ModalScreen[dict]):
         self._probed_ssid_passwords = len(ssid_passwords(probed_ssids))
         self._exhaustion: dict[str, Exhaustion] = {}
         self._wordlists: list[str] = list(self._settings().wordlists)
+        self._deselected: set[str] = set()      # chosen but left out of this launch
+        self._defaulted: set[str] = set()       # identities already given the exhausted default
 
     # CSS, not DEFAULT_CSS: the app's `Button { min-width: 12 }` outranks any DEFAULT_CSS rule.
     # No type prefix: each subclass loads this scoped to its own name.
     CSS = """
     #wordlist-clear, .wordlist-remove { min-width: 0; }
     .exhausted { background: $error 30%; }
+    .wordlist-row:focus-within { background: $primary 40%; }
     """
 
     DEFAULT_CSS = """
@@ -124,6 +137,7 @@ class WordlistConfigModal(ModalScreen[dict]):
         text-align: center;
         text-style: bold;
         color: $accent;
+        margin-bottom: 1;
     }
     #wordlist-choose-row {
         height: auto;
@@ -144,17 +158,14 @@ class WordlistConfigModal(ModalScreen[dict]):
     .wordlist-row {
         height: 1;
     }
-    .wordlist-name {
+    .wordlist-use {
         width: 1fr;
-        margin-left: 1;
-        text-wrap: nowrap;
-        text-overflow: ellipsis;
+        background: transparent;
     }
     #default-passwords {
         margin-top: 1;
     }
     #wordlist-buttons {
-        margin-top: 2;
         align: right middle;
         height: auto;
     }
@@ -175,22 +186,22 @@ class WordlistConfigModal(ModalScreen[dict]):
         with Horizontal(id="wordlist-choose-row"):
             yield Button(f"{BROWSE_GLYPH} Choose wordlists", "primary", id="wordlist-choose")
             yield Button("Clear", variant="error", id="wordlist-clear")
-        yield VerticalScroll(id="wordlists")
+        yield VerticalScroll(id="wordlists", can_focus=False)
 
     def _compose_password_sources(self) -> ComposeResult:
         settings = self._settings()
         yield Checkbox("Default passwords", value=settings.default_passwords,
-                       id="default-passwords")
+                       compact=True, id="default-passwords")
         yield Checkbox("This AP's SSID variants", value=settings.ap_ssid_passwords,
                        tooltip="Passwords based on the AP's SSID: cases, leetspeak, separators, "
                                "common suffixes and numbers 0-9999",
-                       id="ap-ssid-passwords")
-        yield Checkbox(f"Probed SSIDs ({self._probed_ssid_passwords:,})",
+                       compact=True, id="ap-ssid-passwords")
+        yield Checkbox(f"Probed SSIDs [dim]({self._probed_ssid_passwords:,})[/dim]",
                        value=settings.probed_ssid_passwords and self._probed_ssid_passwords > 0,
                        disabled=not self._probed_ssid_passwords,
                        tooltip="Passwords based on SSIDs probed this session (clients may "
                                "mistype the PSK into the SSID field)",
-                       id="probed-ssid-passwords")
+                       compact=True, id="probed-ssid-passwords")
 
     async def on_mount(self) -> None:
         await self._show_wordlists()
@@ -203,11 +214,12 @@ class WordlistConfigModal(ModalScreen[dict]):
             default = self.query_one("#default-passwords", Checkbox)
         except NoMatches:   # dismissed while counting
             return
-        default.label = f"Default passwords ({counts.default_passwords:,})"
+        default.label = f"Default passwords [dim]({counts.default_passwords:,})[/dim]"
         default.tooltip = f"RockYou's top {counts.default_passwords:,} passwords by frequency"
         ap_ssid = (f"{counts.ap_ssid_passwords:,}" if counts.ap_ssid_passwords is not None
                    else f"about {_ssid_variants_per_ssid():,} per SSID")
-        self.query_one("#ap-ssid-passwords", Checkbox).label = f"This AP's SSID variants ({ap_ssid})"
+        self.query_one("#ap-ssid-passwords", Checkbox).label = (
+            f"This AP's SSID variants [dim]({ap_ssid})[/dim]")
         if self._capture is not None:
             self._exhaustion = await asyncio.to_thread(_read_exhaustion, self._capture)
             self._mark_exhausted()
@@ -216,17 +228,21 @@ class WordlistConfigModal(ModalScreen[dict]):
         if not self._exhaustion:
             return
         for row in self.query(".wordlist-row"):
-            self._mark(row, _file_identity(row.query_one(_RemoveButton).path))
+            self._mark(row, _file_identity(row.query_one(_RemoveButton).path),
+                       row.query_one(_UseCheckbox))
         for checkbox in self.query("#default-passwords"):
-            self._mark(checkbox, _file_identity(DEFAULT_PASSWORDS_PATH))
+            self._mark(checkbox, _file_identity(DEFAULT_PASSWORDS_PATH), checkbox)
         for checkbox in self.query("#ap-ssid-passwords"):
-            self._mark(checkbox, SSID_VARIANTS_IDENTITY)
+            self._mark(checkbox, SSID_VARIANTS_IDENTITY, checkbox)
 
-    def _mark(self, widget: Widget, identity: Optional[str]) -> None:
+    def _mark(self, widget: Widget, identity: Optional[str], include: Checkbox) -> None:
         exhaustion = self._exhaustion.get(identity) if identity else None
         if exhaustion is not None:
             widget.add_class("exhausted")
             widget.tooltip = _exhausted_tooltip(exhaustion)
+            if identity not in self._defaulted:     # once: a re-check must survive a redraw
+                self._defaulted.add(identity)
+                include.value = False
 
     async def _show_wordlists(self) -> None:
         self.query_one("#wordlist-clear", Button).display = bool(self._wordlists)
@@ -236,12 +252,9 @@ class WordlistConfigModal(ModalScreen[dict]):
             await rows.mount(Label("[dim]none chosen[/dim]"))
             return
         await rows.mount_all(
-            Horizontal(_RemoveButton(path),
-                       Label(f"[bold]{number}:[/bold] {escape(Path(path).name)}  "
-                             f"[dim]{escape(str(Path(path).parent))}[/dim]",
-                             classes="wordlist-name"),
+            Horizontal(_UseCheckbox(path, path not in self._deselected), _RemoveButton(path),
                        classes="wordlist-row")
-            for number, path in enumerate(self._wordlists, 1))
+            for path in self._wordlists)
         self._mark_exhausted()
 
     @on(Button.Pressed, ".wordlist-remove")
@@ -249,12 +262,23 @@ class WordlistConfigModal(ModalScreen[dict]):
         event.stop()
         assert isinstance(event.button, _RemoveButton)
         self._wordlists.remove(event.button.path)
+        self._deselected.discard(event.button.path)
         await self._show_wordlists()
+
+    @on(Checkbox.Changed, ".wordlist-use")
+    def _toggle_wordlist(self, event: Checkbox.Changed) -> None:
+        event.stop()
+        assert isinstance(event.checkbox, _UseCheckbox)
+        if event.value:
+            self._deselected.discard(event.checkbox.path)
+        else:
+            self._deselected.add(event.checkbox.path)
 
     @on(Button.Pressed, "#wordlist-clear")
     async def _clear_wordlists(self, event: Button.Pressed) -> None:
         event.stop()
         self._wordlists = []
+        self._deselected.clear()
         await self._show_wordlists()
 
     @on(Button.Pressed, "#wordlist-choose")
@@ -291,7 +315,7 @@ class WordlistConfigModal(ModalScreen[dict]):
         self.dismiss(config)
 
     def _launch_config(self) -> Optional[dict[str, Any]]:
-        config = {"wordlists": list(self._wordlists),
+        config = {"wordlists": [path for path in self._wordlists if path not in self._deselected],
                   "default_passwords": self._checked("#default-passwords"),
                   "ap_ssid_passwords": self._checked("#ap-ssid-passwords"),
                   "probed_ssid_passwords": self._checked("#probed-ssid-passwords")}
@@ -317,7 +341,7 @@ class WordlistConfigModal(ModalScreen[dict]):
 
     def _store_settings(self, config: dict[str, Any]) -> None:
         settings = self._settings()
-        settings.wordlists = list(config["wordlists"])
+        settings.wordlists = list(self._wordlists)
         settings.default_passwords = config["default_passwords"]
         settings.ap_ssid_passwords = config["ap_ssid_passwords"]
         if self._probed_ssid_passwords:     # disabled: keep the choice for when there are probes
