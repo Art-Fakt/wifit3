@@ -139,6 +139,48 @@ Untested in the app. To adopt: compare CPU with and without it on the Scanner an
 
 ------------
 
+### AutoDeauth settings modal
+
+AutoDeauth has no options today. Give its button a launch modal, like EvilTwin, with
+its settings persisted in `Config` (not in Preferences).
+
+- Checkboxes to select deauth methods (some disabled when PMF Required).
+- Option to deauth from every card at once, offered only when 2+ cards are plugged in.
+   - Idea proposed by xxcosita3czxx in #114
+
+------------
+
+### Focus: Deauth dropdown
+
+Replace the `Deauth all` button with a `Deauth` dropdown:
+- `Deauthenticate`
+- `Channel-Switch Announce (CSA)`
+- `BSS Transition Mode (BTM)`
+- `Deauth from all X cards`, only when 2+ cards are plugged in.
+
+------------
+
+### Remappable keybindings
+
+A modal with its own `keybinds` section in `Config`, opened from one `Edit Keybindings` 
+row in Preferences. Low priority.
+
+Grid with each row having the functionality, current keybinding, "Default" button.
+
+------------
+
+### Settings as a full-screen view
+
+Promote Preferences from a modal to a full-screen (or partial-screen, slide-up like the Vault) view,
+with room for categories.
+
+Not yet: Preferences is deliberately small (core settings users rarely change: color theme, 
+where and how to save captures, how to auto-crack).
+
+Do this only when absolutely necessary; prefer a per-feature modal over a new Preferences row.
+
+------------
+
 ## Undecided
 
 ### Captive Portal
