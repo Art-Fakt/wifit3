@@ -127,6 +127,18 @@ When a second hashcat mode lands (`-m 4800`/`5500`), the save layer needs a per-
 
 ------------
 
+### (Windows Performance) `timeBeginPeriod(1)` for timer granularity
+
+On Windows `asyncio.sleep` floors at the 15.6 ms timer tick (a 2 ms sleep takes 15.6 ms, 102.4 ms
+takes 109.1). Calling `timeBeginPeriod(1)` at startup measured 2.6 ms and 103.6 ms. It could cut
+latency in the loops that sleep short intervals, but it raises the system timer rate, which can
+cost CPU and battery.
+
+Untested in the app. To adopt: compare CPU with and without it on the Scanner and on Focus
+(about 5 minutes each), then on a slow device; keep it only if CPU doesn't change.
+
+------------
+
 ## Undecided
 
 ### Captive Portal
