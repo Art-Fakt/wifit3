@@ -24,6 +24,7 @@ live in each chip's `<CHIP>.md` (linked under its table).
 | [MT7925AU](#mt7925au) | ✅ | ✅ | ✅ | ✅ | ✅ | A |
 | [MT7601U](#mt7601u) | ✅ | ✅ | ✅ | ✅ | ✅ | A |
 | [RTL8188EUS](#rtl8188eus) | ✅ | ✅ | ✅ | ✅ | ✅ | A |
+| [RTL8192FU](#rtl8192fu) | ✅ | ✅ | ✅ | ✅ | ✅ | A |
 | [RTL8812AU](#rtl8812au) | ✅ | ✅ | ✅ | ✅ | ✅ | A |
 | [RTL8821AU](#rtl8821au) | ✅ | ✅ | ✅ | ✅ | ✅ | A |
 | [RTL8922AU](#rtl8922au) | ✅ | ✅ | ✅ | ✅ | ✅ | A |
@@ -104,6 +105,28 @@ live in each chip's `<CHIP>.md` (linked under its table).
 | Stress | ✅ | 2026-07-30 | 30-min soak, flat (trend 0.97); mainline degrades/collapses. |
 
 → [RTL8188EUS_DKMS.md](../src/wifit3/chips/rtl8188eus_dkms/RTL8188EUS_DKMS.md) (default) · [RTL8188EUS.md](../src/wifit3/chips/rtl8188eus/RTL8188EUS.md) (mainline)
+
+### RTL8192FU
+<img align="right" width="140" src="../assets/cardart/card-dlink-an3u-n300.png" alt="D-Link AN3U rev. A1">
+
+*D-Link AN3U rev. A1 · 2.4 GHz*
+
+> Ported from the mainline Linux `rtl8xxxu` driver (`8192f.c` / `core.c`), Linux v6.19.14.
+
+| Capability | Status | Date | Notes |
+|---|:--:|---|---|
+| **Grade** | **92% (A)** | 2026-10-23 | Kernel-parity RX + full 2.4 attack suite. |
+| RX | ✅ | 2026-10-23 | Ref AP 7.0 vs 7.6/s (92%); breadth 101 vs 102; RSSI −0.6 dB; 11/11 channels. |
+| Port | ✅ | 2026-10-23 | Matches rtl8xxxu: Ref AP beacon rate + RSSI parity. |
+| TX | ✅ | 2026-10-23 | Deauth + WEP inject; live-confirmed. Deauth ACKs: AP 10/10, client 0/10. |
+| Handshake | ✅ | 2026-10-23 | Deauth → 4-way (M1–M4). |
+| PMKID | ✅ | 2026-10-23 | Active extract (M1). |
+| WEP | ✅ | 2026-10-23 | ChopChop + ARP replay ~150–200 IVs/s. |
+| WPS | ✅ | 2026-10-23 | PIN, 2–3 s per PIN; PBC untested. |
+| ACKs | ✅ | 2026-10-23 | Auto-ACK forged MAC via active monitor (Addr2-keyed) & silicon (102/100). |
+| Stress | ✅ | 2026-10-23 | 30-min 14-ch soak, flat (trend 1.01). |
+
+→ [RTL8192FU.md](../src/wifit3/chips/rtl8192fu/RTL8192FU.md)
 
 ### RTL8812AU
 <img align="right" width="109" height="165" src="../assets/cardart/card-awus036ach.png" alt="ALFA AWUS036ACH">
