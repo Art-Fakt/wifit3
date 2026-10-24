@@ -13,6 +13,7 @@ from wifit3.models import AccessPoint, IdKey, IdSource
 from wifit3.persist.config import Config
 from wifit3.persist.vault import Vault
 from wifit3.ui.ap_table import APTable
+from wifit3.ui.app import WifiteApp
 from wifit3.ui.screens.filter import EncryptionFilter, FilterBar, ScanFilter
 from wifit3.ui.screens.scanner import ScannerView
 
@@ -70,6 +71,8 @@ class _FakeArray:
 
 
 class _ScannerHost(App):
+    CSS = WifiteApp.CSS
+
     def __init__(self, array):
         super().__init__()
         self.array = array
@@ -85,21 +88,32 @@ class _ScannerHost(App):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("width", "narrow"), [(83, True), (84, False)])
-async def test_filter_bar_hides_encryption_label_below_84_columns(width, narrow):
-    app = _ScannerHost(_FakeArray([], [1, 6, 11]))
+@pytest.mark.parametrize(("width", "encryption_label_text", "channels_label_text"), [
+    (66, None, None), (67, None, "Ch"), (70, None, "Ch"), (71, "Enc", "Ch"), (75, "Enc", "Ch"),
+    (76, "Enc", "Channel"), (82, "Enc", "Channel"), (83, "Encryption", "Channel"),
+])
+async def test_filter_bar_labels_shrink_then_hide_as_the_terminal_narrows(
+        width, encryption_label_text, channels_label_text):
+    app = _ScannerHost(_FakeArray([], list(range(1, 15)) + [36, 40, 149]))
     async with app.run_test(size=(width, 24)) as pilot:
         await pilot.pause(0)
         scanner = app.screen
-        filter_bar = scanner.query_one(FilterBar)
-        encryption_label = filter_bar.query_one(Label)
+        encryption_label = scanner.query_one("#filter-encryption-label", Label)
+        channels_label = scanner.query_one("#filter-channels-label", Label)
         encryption = scanner.query_one("#filter-encryption")
-        channels = scanner.query_one("#filter-channels", Button)
         filter_input = scanner.query_one("#filter-text", Input)
+        assert str(scanner.query_one("#filter-channels", Button).label) == "2.4G + 5G"
 
         assert filter_input.region.y == encryption.region.y
-        assert encryption_label.display is not narrow
-        assert "Channels:" not in channels.label.plain
+        for label, text in ((encryption_label, encryption_label_text),
+                            (channels_label, channels_label_text)):
+            if text is None:
+                assert label.display is False
+            else:
+                assert label.region.height == 1
+                assert label.region.width == len(text)
+        if channels_label_text is not None:
+            assert scanner.query_one(FilterBar).max_scroll_x == 0
 
 
 @pytest.mark.asyncio

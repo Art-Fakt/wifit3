@@ -7,6 +7,7 @@ import pytest_asyncio
 from textual.app import App, ComposeResult
 from textual.widgets._header import HeaderTitle
 
+from wifit3.ui.app import WifiteApp
 from wifit3.ui.screens.scanner import _ChannelBar, _ChannelReadout, _ScannerHeader
 
 
@@ -15,7 +16,7 @@ def _array(*channels):
 
 
 class _Host(App):
-    CSS = "Header { height: 1 !important; }"
+    CSS = WifiteApp.CSS
 
     def __init__(self, array=None):
         super().__init__()
@@ -82,6 +83,11 @@ async def test_overlapping_channels_use_separate_bar():
         assert channel_bar.display is True
         assert channel_bar.region.y == header.region.bottom
         assert channel_bar.region.right == app.size.width
+
+        app.array.members[0].current_channel = 6
+        readout._poll()
+        await pilot.pause(0)
+        assert str(channel_bar.content) == "CH:  6 | CH:149 | CH:165"
 
 
 @pytest_asyncio.fixture(loop_scope="module", scope="module")

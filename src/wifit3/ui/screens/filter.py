@@ -86,6 +86,8 @@ class FilterBar(HorizontalScroll):
         border-title-style: bold;
     }
     FilterBar > Label { margin-right: 1; color: $text-muted; }
+    FilterBar > #filter-encryption-label,
+    FilterBar > #filter-channels-label { text-wrap: nowrap; text-overflow: clip; }
     FilterBar > #filter-encryption { width: 9; margin-right: 2; }
     FilterBar > #filter-channels { margin-right: 2; }
     FilterBar > Input { width: 1fr; min-width: 16; max-width: 32; }
@@ -109,13 +111,16 @@ class FilterBar(HorizontalScroll):
         self.border_title = "FILTER"
 
     def compose(self) -> ComposeResult:
-        enc = Label("[u]E[/u]ncryption")
+        enc = Label("[u]E[/u]ncryption", id="filter-encryption-label")
         enc.ALLOW_SELECT = False
         yield enc
         yield Select(
             [(f.value, f) for f in EncryptionFilter], value=EncryptionFilter.ALL,
             allow_blank=False, id="filter-encryption", compact=True,
         )
+        channels_label = Label("[u]C[/u]hannel", id="filter-channels-label")
+        channels_label.ALLOW_SELECT = False
+        yield channels_label
         yield Button(self._channels_text(None), id="filter-channels", compact=True)
         yield Input(placeholder="filter by ssid…", id="filter-text", compact=True)
         yield Checkbox("Hide silenced", value=Config.hide_silenced,

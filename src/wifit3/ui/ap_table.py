@@ -222,6 +222,7 @@ COLUMN_KEYS: Tuple[str, ...] = tuple(column.key for column in COLUMNS)
 # +2 reserves the sort indicator, so flipping the sort never resizes a column.
 _HEADER_WIDTHS: Tuple[int, ...] = tuple(Text(column.label).cell_len + 2 for column in COLUMNS)
 _BY_KEY: Dict[str, Column] = {column.key: column for column in COLUMNS}
+_CLIENTS_INDEX = COLUMN_KEYS.index("clients")
 
 
 @dataclass(slots=True)
@@ -479,6 +480,7 @@ class APTable(ScrollView, can_focus=True):
                 max((entry.widths[index] for entry in self._rows.values()), default=0))
             for index, column in enumerate(COLUMNS)
         ]
+        widths[0] = self._ssid_width_fitting_clients(widths)
         if widths != self._widths:
             self._widths = widths
             self._header = None
@@ -492,6 +494,26 @@ class APTable(ScrollView, can_focus=True):
 
     def _content_width(self) -> int:
         return sum(width + 2 * _CELL_PADDING for width in self._widths)
+
+    def _ssid_width_fitting_clients(self, widths: List[int]) -> int:
+        visible_width = self.scrollable_content_region.width
+        if not visible_width:
+            return widths[0]
+        columns_after_ssid = widths[1:_CLIENTS_INDEX + 1]
+        width_after_ssid = sum(columns_after_ssid) + 2 * _CELL_PADDING * len(columns_after_ssid)
+        width_left_for_ssid = visible_width - width_after_ssid - 2 * _CELL_PADDING
+        return max(COLUMNS[0].min_width, min(widths[0], width_left_for_ssid))
+
+    def _refit_ssid_width(self) -> None:
+        self._widths_stale = True
+        if self._relayout():
+            self.refresh()
+
+    def on_resize(self) -> None:
+        self._refit_ssid_width()
+
+    def watch_show_vertical_scrollbar(self) -> None:
+        self._refit_ssid_width()
 
     def _sync_foreground(self) -> bool:
         foreground = self.app.theme_variables.get("foreground", "#ffffff")

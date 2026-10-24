@@ -15,7 +15,7 @@ from textual.screen import Screen
 from wifit3.models import AccessPoint
 from wifit3.persist.config import Config
 from wifit3.persist.vault import Vault
-from wifit3.ui.ap_table import COLUMNS, IDENTITY_CELL_MAX, SSID_CELL_MAX, APRow, APTable
+from wifit3.ui.ap_table import COLUMN_KEYS, COLUMNS, IDENTITY_CELL_MAX, SSID_CELL_MAX, APRow, APTable
 from wifit3.ui.screens.scanner import ScannerView
 from wifit3.ui.encryption_format import EncryptionSummary, EncryptionType
 
@@ -114,6 +114,24 @@ async def test_badges_shrink_the_ssid_but_not_the_column(table):
     plain = table._rows[_row(0).bssid].texts[0].plain
     assert "✓HS" in plain and "✓PMK" in plain
     assert "…" in plain
+
+
+async def test_ssid_column_shrinks_so_clients_fits_at_60_columns():
+    app = _TableHost()
+    async with app.run_test(size=(60, 16)) as pilot:
+        table = app.query_one("#t", APTable)
+        table.set_rows([_row(0, ssid="A" * 32, has_handshake=True, has_pmkid=True), *_rows(40)[1:]])
+        await pilot.pause()
+        assert table.show_vertical_scrollbar
+        clients_end = sum(width + 2 for width in table._widths[:COLUMN_KEYS.index("clients") + 1])
+        assert clients_end <= table.scrollable_content_region.width
+        assert COLUMNS[0].min_width <= table._widths[0] < SSID_CELL_MAX
+        ssid_cell = table.render_line(1).text[:table._widths[0] + 2]
+        assert "✓HS" in ssid_cell and "…" in ssid_cell
+
+        await pilot.resize_terminal(100, 16)
+        await pilot.pause()
+        assert table._widths[0] == SSID_CELL_MAX
 
 
 async def test_verbose_identity_does_not_widen_the_table(table):

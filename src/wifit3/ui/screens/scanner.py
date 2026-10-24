@@ -76,8 +76,10 @@ class _ChannelReadout(HeaderClock):
     def _poll(self) -> None:
         array = getattr(self.app, "array", None)
         members = array.members if array else []
-        self.channels = " | ".join(f"CH:{m.current_channel:>3}" for m in members)
-        self.parent.update_channel_layout(self.channels)
+        channels = " | ".join(f"CH:{m.current_channel:>3}" for m in members)
+        if channels != self.channels:
+            self.channels = channels
+            self.parent.update_channel_layout(channels)
 
     def render(self) -> RenderResult:
         return Text(self.channels)
@@ -101,23 +103,8 @@ class _ChannelBar(Static):
 class _ScannerHeader(Header):
     """Header whose right slot shows the hopped channel(s) in place of the clock."""
 
-    DEFAULT_CSS = """
-    _ScannerHeader {
-        layers: title channels;
-    }
-    _ScannerHeader HeaderTitle {
-        layer: title;
-        width: 100%;
-    }
-    _ScannerHeader HeaderIcon {
-        layer: channels;
-        dock: left;
-    }
-    _ScannerHeader _ChannelReadout {
-        layer: channels;
-        dock: right;
-    }
-    """
+    _channel_layout_inputs: tuple = ()
+    _use_channel_bar = False
 
     def compose(self) -> ComposeResult:
         yield HeaderIcon().data_bind(Header.icon)
@@ -126,13 +113,18 @@ class _ScannerHeader(Header):
 
     def update_channel_layout(self, channels: str) -> None:
         title_width = self.format_title().cell_length
-        title_right = (self.size.width + title_width + 1) // 2
-        channels_left = self.size.width - len(channels)
-        use_channel_bar = bool(channels) and channels_left - title_right < 3
-        self.query_one(_ChannelReadout).display = not use_channel_bar
-        for channel_bar in self.screen.query(_ChannelBar):
-            channel_bar.update(channels)
-            channel_bar.display = use_channel_bar
+        inputs = (self.size.width, title_width, len(channels))
+        if inputs != self._channel_layout_inputs:
+            self._channel_layout_inputs = inputs
+            title_right = (self.size.width + title_width + 1) // 2
+            channels_left = self.size.width - len(channels)
+            self._use_channel_bar = bool(channels) and channels_left - title_right < 3
+            self.query_one(_ChannelReadout).display = not self._use_channel_bar
+            for channel_bar in self.screen.query(_ChannelBar):
+                channel_bar.display = self._use_channel_bar
+        if self._use_channel_bar:
+            for channel_bar in self.screen.query(_ChannelBar):
+                channel_bar.update(channels)
 
     def on_resize(self) -> None:
         self.update_channel_layout(self.query_one(_ChannelReadout).channels)
@@ -143,13 +135,18 @@ class ScannerView(Screen):
 
     app: "WifiteApp"
 
-    HORIZONTAL_BREAKPOINTS = [(0, "-narrow"), (84, "-wide")]
+    HORIZONTAL_BREAKPOINTS = [
+        (0, "-narrow"), (67, "-compact"), (71, "-medium"), (76, "-large"), (83, "-wide"),
+    ]
 
     CSS = """
-    ScannerView.-narrow FilterBar > Label {
-        display: none;
-    }
-
+    ScannerView.-narrow #filter-encryption-label,
+    ScannerView.-compact #filter-encryption-label { display: none; }
+    ScannerView.-medium #filter-encryption-label,
+    ScannerView.-large #filter-encryption-label { width: 3; }
+    ScannerView.-narrow #filter-channels-label { display: none; }
+    ScannerView.-compact #filter-channels-label,
+    ScannerView.-medium #filter-channels-label { width: 2; }
     """
 
     BINDINGS = [
