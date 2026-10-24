@@ -7,6 +7,15 @@ from textual.widgets import Label, Button, ProgressBar
 from wifit3.models.jobs import JobAction, JobState, ToolStatus
 
 # One colour per status; black text on a solid fill reads as a badge.
+_JOB_NAME_W = 25
+_JOB_BAR_W = 11
+_JOB_PERCENT_W = 7
+_JOB_STATUS_W = 11
+_JOB_DETAIL_MIN_W = 16
+_FULL_BUTTON_W = 12
+_COLUMNS_WITHOUT_BAR = _JOB_NAME_W + _JOB_PERCENT_W + 1 + _JOB_STATUS_W + 1
+_COLUMNS_WITH_BAR = _COLUMNS_WITHOUT_BAR + 1 + _JOB_BAR_W
+
 _STATUS_STYLE = {
     ToolStatus.QUEUED: "black bold on white",
     ToolStatus.RUNNING: "black bold on yellow",
@@ -146,17 +155,17 @@ class JobTrackerPane(Widget):
     }
     JobTrackerPane #job-list { height: auto; }
     JobTrackerPane .job-row { height: 1; }
-    JobTrackerPane .job-name { width: 25; text-align: right; }
-    JobTrackerPane .job-bar { width: 11; height: 1; margin-left: 1; }
+    JobTrackerPane .job-name { width: %(name)d; text-align: right; }
+    JobTrackerPane .job-bar { width: %(bar)d; height: 1; margin-left: 1; }
     JobTrackerPane .job-bar Bar { width: 1fr; }
     JobTrackerPane .job-bar Bar > .bar--bar { background: $panel; }
-    JobTrackerPane .job-percent { width: 7; margin-right: 1; text-align: right; }
-    JobTrackerPane .job-status { width: 11; margin-right: 1; }
+    JobTrackerPane .job-percent { width: %(percent)d; margin-right: 1; text-align: right; }
+    JobTrackerPane .job-status { width: %(status)d; margin-right: 1; }
     JobTrackerPane .job-detail { width: 1fr; min-width: 0; overflow-x: hidden; }
     JobTrackerPane .job-pause-btn { min-width: 10; margin-right: 1; }
     JobTrackerPane .job-skip-btn { min-width: 8; margin-right: 1; }
     JobTrackerPane .job-action-btn { min-width: 8; }
-    """
+    """ % {"name": _JOB_NAME_W, "bar": _JOB_BAR_W, "percent": _JOB_PERCENT_W, "status": _JOB_STATUS_W}
 
     def compose(self) -> ComposeResult:
         yield Vertical(id="job-list")
@@ -164,6 +173,7 @@ class JobTrackerPane(Widget):
     def on_mount(self) -> None:
         self._rows: dict[str, JobRow] = {}
         self._jobs: list[JobState] = []
+        self._layout_inputs: tuple = ()
         if not hasattr(self.app, "active_jobs"):
             return
         self.watch(self.app, "active_jobs", self._sync)
@@ -197,11 +207,13 @@ class JobTrackerPane(Widget):
                 row.sync(job)
 
     def _sync_layout(self) -> None:
-        normal_fixed_columns = 57
-        no_bar_fixed_columns = 45
-        normal_required = normal_fixed_columns + 16
-        compact_required = normal_fixed_columns + 16
-        compact_name_required = no_bar_fixed_columns + 16
+        inputs = (self.size.width, tuple(frozenset(job.actions) for job in self._jobs))
+        if inputs == self._layout_inputs:
+            return
+        self._layout_inputs = inputs
+        normal_required = _COLUMNS_WITH_BAR + _JOB_DETAIL_MIN_W
+        compact_required = _COLUMNS_WITH_BAR + _JOB_DETAIL_MIN_W
+        compact_name_required = _COLUMNS_WITHOUT_BAR + _JOB_DETAIL_MIN_W
         for job in self._jobs:
             labels: list[tuple[str, int]] = []
             if JobAction.PAUSE in job.actions or JobAction.RESUME in job.actions:
@@ -212,13 +224,14 @@ class JobTrackerPane(Widget):
                 labels.append(("Stop" if JobAction.STOP in job.actions else "Clear", 0))
             normal_required = max(
                 normal_required,
-                normal_fixed_columns + 16 + sum(12 + margin for _, margin in labels),
+                _COLUMNS_WITH_BAR + _JOB_DETAIL_MIN_W
+                + sum(_FULL_BUTTON_W + margin for _, margin in labels),
             )
             compact_action_columns = sum(len(label) + 4 + margin for label, margin in labels)
             compact_required = max(
-                compact_required, normal_fixed_columns + 16 + compact_action_columns)
+                compact_required, _COLUMNS_WITH_BAR + _JOB_DETAIL_MIN_W + compact_action_columns)
             compact_name_required = max(
-                compact_name_required, no_bar_fixed_columns + 16 + compact_action_columns)
+                compact_name_required, _COLUMNS_WITHOUT_BAR + _JOB_DETAIL_MIN_W + compact_action_columns)
         compact_actions = self.size.width < normal_required
         hide_progress = compact_actions and self.size.width < compact_required
         compact_name = hide_progress and self.size.width < compact_name_required

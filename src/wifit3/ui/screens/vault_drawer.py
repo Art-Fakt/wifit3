@@ -77,14 +77,6 @@ class VaultDrawer(ModalScreen):
             yield Footer()
 
     def on_mount(self) -> None:
-        narrow = self.size.width < 90
-        compact = 90 <= self.size.width < 105
-        self.set_class(narrow, "-narrow")
-        self.set_class(compact, "-compact")
-        self.set_class(not narrow and not compact, "-wide")
-        short = self.size.height < 36
-        self.set_class(short, "-short")
-        self.set_class(not short, "-tall")
         self.call_after_refresh(self._focus_list)
 
     def _schedule_reveal(self) -> None:

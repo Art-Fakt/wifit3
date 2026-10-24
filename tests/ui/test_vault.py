@@ -423,7 +423,7 @@ async def test_a_hashline_capture_offers_each_cracker_by_its_label(tmp_path, wid
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("no_usb_devices")
-async def test_capture_tools_wrap_without_stacking_actions(tmp_path):
+async def test_capture_tools_scroll_on_one_row_without_stacking_actions(tmp_path):
     _write(tmp_path, "HomeNet_aa-bb-cc-dd-ee-ff.hc22000", _HS_LINE)
     app = WifiteApp()
     async with app.run_test(size=(30, 40)) as pilot:
@@ -436,7 +436,8 @@ async def test_capture_tools_wrap_without_stacking_actions(tmp_path):
         panel = view.query_one(_CapturePanel)
         buttons = list(panel.query(".tool-btn").results(Button))
         assert [str(button.label) for button in buttons] == ["Hashcat", "CPU Crack"]
-        assert buttons[0].region.y != buttons[1].region.y
+        assert buttons[0].region.y == buttons[1].region.y
+        assert panel.query_one(".tools").max_scroll_x > 0
 
         open_directory = panel.query_one(".open-dir", Button)
         delete = panel.query_one(".delete", Button)

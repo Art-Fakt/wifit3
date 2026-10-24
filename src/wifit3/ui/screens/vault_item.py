@@ -16,7 +16,6 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, HorizontalScroll, Vertical, VerticalGroup
 from textual.content import Content
-from textual.css.query import NoMatches
 from textual.events import Event
 from textual.reactive import reactive
 from textual.screen import ModalScreen
@@ -101,7 +100,6 @@ class _CapturePanel(VerticalGroup):
     _CapturePanel .copy-btn { min-width: 0; margin-right: 3; }
     _CapturePanel .verify-btn { min-width: 14; }
     _CapturePanel .tools { height: auto; margin-bottom: 1; }
-    _CapturePanel .tool-row { height: auto; }
     _CapturePanel .actions { height: auto; align: left middle; }
     _CapturePanel .spacer { width: 1fr; }
     """
@@ -117,7 +115,6 @@ class _CapturePanel(VerticalGroup):
         self._files = list(self._by_path.values())
         self._verify_task: Optional[asyncio.Task] = None
         self._selected_capture = self._files[0]
-        self._tool_layout: tuple[tuple[str, ...], int] | None = None
 
     def cancel_verification(self) -> None:
         """Cancel any running verification task on this panel."""
@@ -158,7 +155,7 @@ class _CapturePanel(VerticalGroup):
                     pass # populated on file_changed
                 yield Label(self._date_markup(newest), classes="date")
 
-        yield VerticalGroup(classes="tools")
+        yield HorizontalScroll(classes="tools")
         with Horizontal(classes="actions"):
             yield Button("Open Directory", classes="open-dir")
             yield Label("", classes="spacer")
@@ -166,10 +163,6 @@ class _CapturePanel(VerticalGroup):
 
     def on_mount(self) -> None:
         self._update_display(self._files[0])
-        self.call_after_refresh(self._update_tool_rows)
-
-    def on_resize(self) -> None:
-        self.call_after_refresh(self._update_tool_rows)
 
     def _date_markup(self, cap: PersistedCapture) -> str:
         dt = datetime.fromtimestamp(cap.timestamp).strftime("%Y-%m-%d %H:%M")
@@ -182,8 +175,12 @@ class _CapturePanel(VerticalGroup):
         kg = self.query_one(".key-group")
         kg.remove_children()
 
-        self._tool_layout = None
-        self._update_tool_rows()
+        tools = self.query_one(".tools")
+        tools.remove_children()
+        crackers = [t for t in self.app.vault.manager.tools.values() if t.can_crack(cap)]
+        tools.mount_all(Button(t.label, "primary", classes=f"tool-btn launch-tool-{t.name}")
+                        for t in crackers)
+        tools.display = bool(crackers)
 
         def _row(label: str, val: str, btn_id: str, target_type: Optional[CaptureType] = None):
             verify_btn = Button("Verify", id=f"verify-{btn_id}", variant="primary", classes="verify-btn",
@@ -223,50 +220,6 @@ class _CapturePanel(VerticalGroup):
             kg.mount(Label(summary, classes="key-display"))
         elif self._title == "HANDSHAKE":
             kg.mount(Label("[italic]raw .pcap capture[/italic]", classes="key-display"))
-
-    def _update_tool_rows(self) -> None:
-        if not self.is_attached:
-            return
-        try:
-            tools = self.query_one(".tools", VerticalGroup)
-        except NoMatches:
-            return
-        crackers = [
-            tool for tool in self.app.vault.manager.tools.values()
-            if tool.can_crack(self._selected_capture)
-        ]
-        available_width = tools.content_size.width or self.content_size.width
-        signature = (tuple(str(tool.name) for tool in crackers), available_width)
-        if signature == self._tool_layout:
-            return
-        self._tool_layout = signature
-        tools.remove_children()
-
-        rows: list[list] = []
-        row: list = []
-        row_width = 0
-        for tool in crackers:
-            button_width = max(12, Text(str(tool.label)).cell_len + 4) + 1
-            if row and row_width + button_width > available_width:
-                rows.append(row)
-                row = []
-                row_width = 0
-            row.append(tool)
-            row_width += button_width
-        if row:
-            rows.append(row)
-
-        tools.mount_all(
-            Horizontal(
-                *(
-                    Button(tool.label, "primary", classes=f"tool-btn launch-tool-{tool.name}")
-                    for tool in row_tools
-                ),
-                classes="tool-row",
-            )
-            for row_tools in rows
-        )
-        tools.display = bool(crackers)
 
     @on(Select.Changed)
     def _file_changed(self, event: Select.Changed) -> None:
