@@ -114,7 +114,7 @@ class PacketDashboard(Static):
 
 
     def _two_row(self) -> bool:
-        return self.screen.size.height >= 32
+        return self.screen.has_class("-tall")
 
     def _col(self, v: int, peak: int, levels: int) -> int:
         if v <= 0:

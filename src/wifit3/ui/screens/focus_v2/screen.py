@@ -81,6 +81,7 @@ _ENDPOINT_W = 20  # the .ans art is exactly 20 cells wide
 _TOPBAR_H = 3
 _CHROME_H = 2  # Buffer for Textual's Header & Footer (1 row each)
 _BORDER = "$primary"  # Border/title color for  LOG / CLIENTS panels
+_STACKED_CLIENT_ROWS_MAX = 6
 
 # Mid-band height
 _CENTER_MAX = 13
@@ -141,7 +142,7 @@ class FocusViewV2(Screen):
         (0, "-tiny"), (60, "-narrow"), (81, "-compact"),
         (100, "-normal"), (140, "-wide"),
     ]
-    VERTICAL_BREAKPOINTS = [(0, "-short"), (36, "-tall")]
+    VERTICAL_BREAKPOINTS = [(0, "-compact-height"), (32, "-short"), (36, "-tall")]
 
     # Attack hotkeys come from the campaign registry
     BINDINGS = [
@@ -165,8 +166,8 @@ class FocusViewV2(Screen):
     #topbar { height: %(top)d; }
     #actions { width: auto; height: 100%%; }
     #topbar Button { height: 3; width: auto; min-width: 0; margin: 0 1 0 0; }
-    FocusViewV2.-short #actions { align: left middle; }
-    FocusViewV2.-short #topbar Button { height: 1; border: none; }
+    FocusViewV2.-compact-height #actions { align: left middle; }
+    FocusViewV2.-compact-height #topbar Button { height: 1; border: none; }
     /* No background override on .attack-btn */
     #status { width: 1fr; height: 3; content-align: center middle; text-align: center; }
     #rspacer { width: 0; height: 1; }
@@ -193,6 +194,7 @@ class FocusViewV2(Screen):
         height: 50%%;
         offset-y: 50%%;
     }
+    FocusViewV2.-tiny.-short #card,
     FocusViewV2.-tiny.-compact-height #card {
         display: block;
         dock: right;
@@ -200,19 +202,25 @@ class FocusViewV2(Screen):
     #dashboard { width: 1fr; height: 100%%; padding: 0 1; }
     .endpoint-art { width: %(ew)d; background: transparent; }
     FocusViewV2.-tiny .endpoint-art,
+    FocusViewV2.-short .endpoint-art,
     FocusViewV2.-compact-height .endpoint-art { display: none; }
+    FocusViewV2.-short #card,
     FocusViewV2.-compact-height #card {
         height: 3;
         offset-y: 4;
         align: center top;
     }
+    FocusViewV2.-short #router,
     FocusViewV2.-compact-height #router {
         height: 5;
         offset-y: 0;
         align: center top;
     }
+    FocusViewV2.-short #ap-power,
     FocusViewV2.-compact-height #ap-power { margin-bottom: 1; }
+    FocusViewV2.-tiny.-short #router,
     FocusViewV2.-tiny.-compact-height #router { height: 4; }
+    FocusViewV2.-tiny.-short #ap-power,
     FocusViewV2.-tiny.-compact-height #ap-power { margin-bottom: 0; }
 
     .card-static, .ap-static { width: 100%%; height: 1; text-align: center; color: $text-muted; }
@@ -241,7 +249,10 @@ class FocusViewV2(Screen):
                border-title-color: %(border)s; border-title-style: bold; padding: 0 1; }
     FocusViewV2.-tiny #bottom, FocusViewV2.-narrow #bottom { layout: vertical; }
     FocusViewV2.-tiny #clients, FocusViewV2.-narrow #clients {
-        dock: none; width: 100%%; height: 1fr;
+        dock: none; width: 100%%; height: auto;
+    }
+    FocusViewV2.-tiny #client-rows, FocusViewV2.-narrow #client-rows {
+        height: auto; min-height: 1; max-height: %(stacked_client_rows_max)d;
     }
     FocusViewV2.-tiny #log, FocusViewV2.-narrow #log { width: 100%%; height: 1fr; }
     /* Rows scroll inside a fixed-height region; the broadcast button stays pinned. */
@@ -261,6 +272,7 @@ class FocusViewV2(Screen):
     .cl-deauth { width: 3; min-width: 3; height: 1; border: none; margin: 0 0 0 1;
                  background: red; color: white; content-align: center middle; }
     """ % {
+        "stacked_client_rows_max": _STACKED_CLIENT_ROWS_MAX,
         "ew": _ENDPOINT_W,
         "top": _TOPBAR_H,
         "border": _BORDER,
@@ -288,6 +300,7 @@ class FocusViewV2(Screen):
         self._binding_sig: Optional[tuple] = None
         self._rspacer_w = -1                          # last-set spacer width; skip no-op relayouts
         self._status_below_actions = False
+        self._status_layout_inputs: tuple = ()
 
     # ----- compose -----------------------------------------------------------
 
@@ -670,15 +683,13 @@ class FocusViewV2(Screen):
         return self._controls.current is None   # no other attack owns the radio
 
     def _distribute(self) -> None:
-        """Compact the graph below 32 rows and give the reclaimed space to the bottom panels."""
+        """Compact the graph below 36 rows and give the reclaimed space to the bottom panels."""
         tracker = self.query_one(GlobalJobTracker)
         self._balance_status()
         topbar_height = self._topbar_height()
         chrome = _CHROME_H + int(bool(tracker.display))
         avail = max(1, self.size.height - topbar_height - chrome)
-        compact_height = self.size.height < 32
-        self.set_class(compact_height, "-compact-height")
-        if compact_height:
+        if not self.has_class("-tall"):
             center = _COMPACT_CENTER_H
         else:
             center = min(_CENTER_MAX, max(_CENTER_MIN, avail - _BOTTOM_MIN))
@@ -692,7 +703,7 @@ class FocusViewV2(Screen):
     def _topbar_height(self) -> int:
         if not self._status_below_actions:
             return _TOPBAR_H
-        return (1 if self.has_class("-short") else _TOPBAR_H) + _TOPBAR_H
+        return (1 if self.has_class("-compact-height") else _TOPBAR_H) + _TOPBAR_H
 
     def _balance_status(self) -> None:
         """Center status beside actions, or place it below when symmetry no longer fits."""
@@ -700,19 +711,24 @@ class FocusViewV2(Screen):
         topbar_w = self.size.width
         actions = self.query_one("#actions")
         visible_buttons = [button for button in actions.query(Button) if button.display]
+        widest = max((Text.from_markup(s, emoji=False).cell_len
+                      for s in (self._last_status or [])), default=0)
+        inputs = (topbar_w, widest, self.has_class("-compact-height"),
+                  tuple((str(button.label), tuple(button.classes)) for button in visible_buttons))
+        if inputs == self._status_layout_inputs:
+            return
+        self._status_layout_inputs = inputs
         actions_w = sum(
             button.get_content_width(self.size, self.size) + button.styles.margin.width
             for button in visible_buttons
         )
-        widest = max((Text.from_markup(s, emoji=False).cell_len
-                      for s in (self._last_status or [])), default=0)
         status_below = 2 * actions_w + widest > topbar_w
         layout_changed = self._status_below_actions != status_below
         self._status_below_actions = status_below
         topbar.styles.layout = "vertical" if status_below else "horizontal"
         topbar.styles.height = self._topbar_height()
         actions.styles.width = "100%" if status_below else "auto"
-        action_height = 1 if self.has_class("-short") else _TOPBAR_H
+        action_height = 1 if self.has_class("-compact-height") else _TOPBAR_H
         actions.styles.height = action_height if status_below else "100%"
         status = self.query_one("#status", Static)
         status.styles.width = "100%" if status_below else "1fr"

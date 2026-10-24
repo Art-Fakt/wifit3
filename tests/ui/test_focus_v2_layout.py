@@ -55,7 +55,7 @@ async def test_layout_geometry():
 
             card, dash, router = reg("#card"), reg("#dashboard"), reg("#router")
             endpoint_art = list(scr.query(".endpoint-art"))
-            assert all(widget.display is (h >= 32) for widget in endpoint_art)
+            assert all(widget.display is (h >= 36) for widget in endpoint_art)
             assert scr.query_one("#ap-power").display
             assert scr.query_one("#ap-essid").display
             assert scr.query_one("#ap-bssid").display
@@ -64,7 +64,7 @@ async def test_layout_geometry():
             # terminals the mid row gets symmetric side padding (none at 80 cols).
             pad = max(0, round((w - 80) * 0.4))
             assert card.width == 20 and router.width == 20
-            if h < 32:
+            if h < 36:
                 assert router.height == 5 and card.height == 3
                 assert router.y == reg("#mid").y and card.bottom == reg("#mid").bottom
                 assert reg("#ap-essid").y == reg("#ap-power").bottom + 1
@@ -92,14 +92,14 @@ async def test_layout_geometry():
             assert top.bottom == mid.y and mid.bottom == bot.y and bot.bottom == footer.y
             avail = h - _TOPBAR_H - _CHROME_H
             expected_center = (
-                _COMPACT_CENTER_H if h < 32
+                _COMPACT_CENTER_H if h < 36
                 else min(_CENTER_MAX, max(_CENTER_MIN, avail - _BOTTOM_MIN))
             )
             assert mid.height == expected_center
             assert bot.height == avail - expected_center
 
 
-@pytest_asyncio.fixture(params=[(35, 1), (36, 3)])
+@pytest_asyncio.fixture(params=[(31, 1), (32, 3)])
 async def focus_button_height(request):
     height, expected = request.param
     app = _Host()
@@ -113,9 +113,26 @@ async def test_short_focus_uses_compact_top_buttons(focus_button_height):
     assert actual == expected
 
 
+async def test_stacked_clients_fit_their_rows_and_give_the_rest_to_the_log():
+    app = _Host()
+    async with app.run_test(size=(60, 32)) as pilot:
+        await pilot.pause(0)
+        screen = app.screen
+        clients_list = screen.query_one("#clients")
+        assert screen.query_one("#client-rows").region.height == 1
+        empty_log_height = screen.query_one("#log").region.height
+
+        clients_list.sync([types.SimpleNamespace(mac=f"02:00:00:00:00:{i:02x}", signal=-50,
+                                                 packets=1, fingerprint=None) for i in range(10)])
+        await pilot.pause(0)
+        assert screen.query_one("#client-rows").region.height == 6
+        assert screen.query_one("#log").region.height == empty_log_height - 5
+        assert screen.query_one("#log").region.bottom == screen.query_one("#bottom").region.bottom
+
+
 async def test_endpoint_art_is_hidden_below_60_columns():
     app = _Host()
-    async with app.run_test(size=(59, 35)) as pilot:
+    async with app.run_test(size=(59, 36)) as pilot:
         await pilot.pause(0)
         screen = app.screen
         assert all(not widget.display for widget in screen.query(".endpoint-art"))
@@ -128,7 +145,7 @@ async def test_endpoint_art_is_hidden_below_60_columns():
         assert router.bottom == card.y
         assert dashboard.bottom - card.bottom <= 1
 
-        await pilot.resize_terminal(60, 35)
+        await pilot.resize_terminal(60, 36)
         await pilot.pause(0)
         assert all(widget.display for widget in screen.query(".endpoint-art"))
         card = screen.query_one("#card").region
