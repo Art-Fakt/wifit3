@@ -8,7 +8,7 @@ from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.color import Color
-from textual.containers import Horizontal, Vertical, VerticalGroup, VerticalScroll
+from textual.containers import Horizontal, VerticalGroup, VerticalScroll
 from textual.events import Event
 from textual.screen import ModalScreen
 from textual.theme import Theme
