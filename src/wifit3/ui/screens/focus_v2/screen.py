@@ -301,6 +301,7 @@ class FocusViewV2(Screen):
         self._rspacer_w = -1                          # last-set spacer width; skip no-op relayouts
         self._status_below_actions = False
         self._status_layout_inputs: tuple = ()
+        self._last_footer_markups: tuple[str, ...] | None = None
 
     # ----- compose -----------------------------------------------------------
 
@@ -523,6 +524,7 @@ class FocusViewV2(Screen):
         self._events.reset()
         self._eapol_agg.reset()
         self._prev_stats = None        # drop the old target's counters
+        self._last_footer_markups = None
         self.query_one("#log", LogBand).clear()
 
         status = self._status()
@@ -746,8 +748,11 @@ class FocusViewV2(Screen):
         if ap is None:
             return
         array = self.app.array
-        lines = [Text.from_markup(m, emoji=False)
-                 for m in fm.status_under_dash(ap, array, time.time())]
+        markups = tuple(fm.status_under_dash(ap, array, time.time()))
+        if markups == self._last_footer_markups:
+            return
+        self._last_footer_markups = markups
+        lines = [Text.from_markup(markup, emoji=False) for markup in markups]
         self.query_one("#dashboard", PacketDashboard).set_footer(lines)
 
     # ----- endpoint LED flicker (instrumentation) ----------------------------
