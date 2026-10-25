@@ -81,6 +81,16 @@ SSIDs (not their variants), with `Copy` and a primary `Close`.
 
 ------------
 
+### Vault: any `.pcap`/`.cap` dropped into `captures/`
+
+Users with captures from other tools (airodump `capture-01.cap`, etc.) could drop them into
+`captures/`, open Vault, and launch their cracker with their wordlists. Today the index only
+recognises `<ssid>_<bssid>_<epoch>_<kind>.<ext>` names. Reading BSSID and ESSID from the file
+itself (a pcap's beacon; `dot11/` already parses frames) would also fix pcap-only APs whose
+SSID the filename can't hold (emoji, non-ASCII → `____`).
+
+------------
+
 ### Auto-Decloak Known APs
 
 Opt-**in** only: `[ ] Auto-decloak known APs` in Preferences (`ui/pref.py`) plus
