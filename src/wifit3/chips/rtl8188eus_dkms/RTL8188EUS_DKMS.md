@@ -2,8 +2,9 @@
 
 Sibling of `chips/rtl8188eus/` (mainline), ported from the Realtek vendor/DKMS driver. RTL8188EUS
 silicon: 1T1R, 2.4 GHz only, phydm/ODM RX stack, firmware-based. The goal of the re-port is hotter,
-**stable** 2.4 GHz monitor RX than mainline drives the 8188e at. VID:PID `2357:010c`; registered
-behind `WIFIT3_RTL8188` (mainline default, `=dkms` opts in).
+**stable** 2.4 GHz monitor RX than mainline drives the 8188e at. VID:PIDs (e.g. `2357:010c`,
+`0bda:8179`) in lockstep with mainline; this port is the family default and `WIFIT3_RTL8188=mainline`
+falls back (`device/manager.py` `_DKMS_BY_DIR`).
 
 ## Linux Driver Source
 
@@ -19,11 +20,10 @@ reconnected, 20/20 captured EAPOL to/from it). RX is promiscuous both directions
 data is captured, so the crackable WPA M2 is reachable (no ToDS-filter gap). `verify_pcap` is clean
 end-to-end on all three captures.
 
-Default still ships `mainline`. The RX A/B is nuanced (2026-07-07, see Debug log): the DKMS port is at
+The RX A/B is nuanced (2026-07-07, see Debug log): the DKMS port is at
 **kernel parity fixed-channel on a strong AP** (6.5 vs 6.2 bcn/s) but shows a **real ~18 % gap in the
 hopping sweep** (7/6 same-session Kali A/B: 5.3 vs 7.0 on the reference AP, concentrated on weaker
-APs) — and mainline had a *smaller* sweep gap than dkms there, so the flip is **not** justified on RX
-rate yet. Untested/un-walked: uncaptured TX-desc variants, 40 MHz, power-save, sreset recovery, and
+APs) — and mainline had a *smaller* sweep gap than dkms there. Untested/un-walked: uncaptured TX-desc variants, 40 MHz, power-save, sreset recovery, and
 the runtime IQK/LCK/power-track triggers — no wire ground-truth exists for any of these.
 
 ## Gotchas
@@ -59,6 +59,12 @@ settings do not affect monitor-mode hardware initialization. `rfe_type` is retai
 parity but `PHY_SetRFEReg_8188E` has only its common case-0/default write sequence. The PA/LNA
 select `0xCA[3:2]` and GLNA select `0xCA[6:4]` do affect table walks: the reference card's blank
 `0xCA` selects internal PA+LNA; external variants are source-ported but hardware-untested.
+
+**Claim interface 0 before the first EP0 transfer (Windows).** Unclaimed, libusb/WinUSB claims and
+releases it around every control transfer; that churn intermittently fails with `[170] The
+requested resource is in use` (pyusb: `Entity not found`), the old "EFUSE-read ENOENT" flake.
+Measured on one Windows host, two cards: 17/300 bring-ups failed unclaimed, 0/600 claimed. The
+`_POST_RESET_SETTLE_S` pause in `firmware.py` was added for the same error; 0/200 with it at 0.
 
 **Two more deferred items, non-default but real:** the receiver-blocking NBI notch arms only with
 `rtw_adaptivity_en=1` (e.g. ETSI), and powertrack IQK/LCK only fires on ≥8 °C thermal drift.

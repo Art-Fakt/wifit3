@@ -27,6 +27,7 @@ from importlib import resources
 from typing import Callable, ClassVar, List, Optional
 
 import usb.core
+import usb.util
 
 from wifit3.chips.driver import DeviceID, Driver, FakeMacSupport, ProgressCallback
 from wifit3.errors import BringUpError
@@ -90,7 +91,7 @@ class Rtl8188eusDkmsDriver(Driver):
         self._on_lost = cb
 
     async def connect(self, progress_cb: Optional[ProgressCallback] = None) -> bool:
-        """Wrap the blocking bring-up so a USB fault (e.g. the intermittent EFUSE-read ENOENT)
+        """Wrap the blocking bring-up so a USB fault (e.g. an unplug mid bring-up)
         surfaces as a BringUpError instead of a raw USBError that slips past
         WlanInterface.connect's handler as a hard crash."""
         try:
@@ -102,6 +103,10 @@ class Rtl8188eusDkmsDriver(Driver):
 
     async def _bringup(self, progress_cb: Optional[ProgressCallback] = None) -> bool:
         loop = asyncio.get_running_loop()
+
+        # Hold interface 0 for the session: unclaimed, WinUSB claims and releases it around every
+        # EP0 transfer, and that churn intermittently fails with "Entity not found".
+        await loop.run_in_executor(None, usb.util.claim_interface, self.transport.dev, 0)
 
         if progress_cb:
             progress_cb(0.0, "Power-on + reading EFUSE / chip parameters")
