@@ -159,6 +159,9 @@ class RT3070Driver(Driver):
         if progress_cb:
             progress_cb(0.1, "RT3070: probe + EFUSE + firmware + radio bring-up")
         try:
+            # Hold interface 0 for the session: unclaimed, WinUSB claims and releases it around
+            # every EP0 transfer, and that churn intermittently fails with "Entity not found".
+            await loop.run_in_executor(None, usb.util.claim_interface, self.transport.dev, 0)
             await loop.run_in_executor(None, self._bringup)
         except Exception as e:  # noqa: BLE001
             raise BringUpError("bring-up", str(e)) from e
