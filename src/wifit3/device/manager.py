@@ -427,6 +427,7 @@ class DeviceManager:
                 return BringupResult.failed("Installation required. START it from the main menu.")
             # else fixable: fall through to setup
         except BringUpError as e:
+            logger.warning("%s: bring-up failed (%s): %s", device_id.chipset, e.stage, e.detail)
             return BringupResult.failed(self._fault_message(device_id, e))
         except OSError as e:
             logger.exception("%s: USB error during bring-up", device_id.chipset)
@@ -440,6 +441,7 @@ class DeviceManager:
             await self._connect_and_attach(device_id)
             return BringupResult.ready()
         except BringUpError as e:
+            logger.warning("%s: bring-up failed (%s): %s", device_id.chipset, e.stage, e.detail)
             return BringupResult.failed(self._fault_message(device_id, e))
         except OSError as e:
             logger.exception("%s: USB error during bring-up", device_id.chipset)
