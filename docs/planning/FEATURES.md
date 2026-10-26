@@ -240,6 +240,24 @@ CPU Crack runs on one CPU thread. Not doing it now:
 
 Revisit only if users report the one-thread limit is their bottleneck.
 
+### Key version 3 nonce correction for hashcat before 8.0.0
+
+hashcat before 8.0.0 never cracks a key version 3 (AES-CMAC) `WPA*02` line whose stored ANonce
+drifted from the real one: its nonce error correction edits ANonce bytes 63-66 instead of 64-67
+(`OpenCL/m22000-pure.cl`, v7.1.2). hashcat 8.0.0 fixed it.
+
+Workaround: write one line per corrected ANonce (captured, +/-4, both byte orders: 17 lines) with
+the NC bit (`0x80`) cleared. On a drifted test line, 7.1.2 goes from Exhausted to `Recovered 1/17`.
+
+Cost, one GPU, 29M-word list, 17 lines vs 1:
+- 7.1.2: no measurable change (82-83 s vs 81 s).
+- 8.0.0: +25% (29-31 s vs 23-24 s), where its own correction costs nothing.
+
+So only for hashcat before 8.0.0: a temp hashfile at launch, after reading the local
+`hashcat --version`. Never in the stored `.hc22000`.
+
+Not observed: 0 of 67 crackable `WPA*02` lines needed it.
+
 ### WPS improvements - Low priority (who even has a vulnerable WPS router?)
 
 The WPS engine is built, offline-proven, and HW-validated (full PIN crack on AirLink). Gaps:
